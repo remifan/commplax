@@ -2,8 +2,8 @@ import numpy as np
 from scipy import signal
 import scipy.io as spio
 import matplotlib.pyplot as plt
-from complax import src
-from complax.contrib import frft, ifrft
+from commplax import src
+from commplax.contrib import frft, ifrft
 
 def xcorr(y, x):
     x = np.asarray(x)

@@ -2,10 +2,12 @@ import numpy as np
 from jax import grad, value_and_grad, lax, jit, vmap, numpy as jnp, devices, device_put
 from jax.ops import index, index_add, index_update
 from functools import partial
-from complax import xop, src
+from commplax import xop, src
+
 
 cpus = devices("cpu")
 gpus = devices("gpu")
+
 
 def dbp_model_general(y, steps, h, c):
 
@@ -105,7 +107,7 @@ def loss_cma(w, u, d):
     return l
 
 
-def mu_cma(y_f, w_init, lr=1e-4, alpha=0.99, const=src.const("16QAM", norm=True), device=cpus[0]):
+def mu_cma(y_f, w_init, lr=1e-4, alpha=0.999, const=src.const("16QAM", norm=True), device=cpus[0]):
     d = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
 
     ntap = w_init.shape[0]
@@ -158,23 +160,65 @@ def loss_lms(v, x, np=jnp):
     return np.sum(np.abs(x - v)**2)
 
 
-def cpr_ekf(signal, init_states=None, device=cpus[0]):
+def cpane_ekf(signal, beta=0.95, device=cpus[0]):
     '''
     References:
-    Jain, A., Krishnamurthy, P.K., Landais, P. and Anandarajah, P.M., 2017.
+    [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
+    of phase and amplitude noise in coherent QAM systems. Optics express, 24(6), pp.6391-6401.
+    '''
+    const = src.const("16QAM", norm=True)
+
+    init_states = (1e-4 * (1.+1j), 1e-2 * (1.+1j), 0j, 1j, 0j)
+
+    signal = device_put(signal, device)
+    init_states = device_put(init_states, device)
+    const = device_put(const, device)
+
+    @jit
+    def step(states, r):
+        Q, R, Psi_c, P_c, Psi_a = states
+
+        Psi_p = Psi_c
+        P_p = P_c + Q
+
+        Psi_a = beta * Psi_a + (1 - beta) * Psi_c
+
+        t = r * jnp.exp(-1j * Psi_a)
+        d = const[jnp.argmin(jnp.abs(const - t))]
+
+        H = 1j * d * jnp.exp(1j * Psi_p)
+        K = P_p * H.conj() / (H * P_p * H.conj() + R)
+        v = r - d * jnp.exp(1j * Psi_p)
+        Psi_c = Psi_p + K * v
+        P_c = (1. - K * H) * P_p
+
+        return (Q, R, Psi_c, P_c, Psi_a), Psi_c
+
+    _, ret = lax.scan(step, init_states, signal)
+
+    return ret
+
+
+def cpr_foe_ekf(signal, init_states=None, device=cpus[0]):
+    '''
+    References:
+    [1] Jain, A., Krishnamurthy, P.K., Landais, P. and Anandarajah, P.M., 2017.
     EKF for joint mitigation of phase noise, frequency offset and nonlinearity
     in 400 Gb/s PM-16-QAM and 200 Gb/s PM-QPSK systems. IEEE Photonics Journal,
     9(1), pp.1-10.
+    [2] Lin, W.T. and Chang, D.C., 2006, May. The extended Kalman filtering algorithm
+    for carrier synchronization and the implementation. In 2006 IEEE International
+    Symposium on Circuits and Systems (pp. 4-pp). IEEE.
     '''
 
     if init_states is None:
         init_states = (
-          1e-2 * jnp.eye(2),
-          jnp.array([[1e-5,  0],
-                    [0,  1e-9]]),
+          jnp.array([[1e-4,  0],
+                     [0,  1e-9]]),
+          1e-1 * jnp.eye(2),
           jnp.array([[0.],
-                    [0]]),
-          jnp.eye(2),
+                    [0.]]),
+          jnp.eye(2)
         )
 
     A = jnp.array([[1, 1],
@@ -189,7 +233,7 @@ def cpr_ekf(signal, init_states=None, device=cpus[0]):
 
     @jit
     def step(states, r):
-        R, Q, x_c, P_c = states
+        Q, R, x_c, P_c = states
 
         x_p = A @ x_c
         P_p = A @ P_c @ A.T + Q
@@ -207,11 +251,11 @@ def cpr_ekf(signal, init_states=None, device=cpus[0]):
         x_c = x_p + K @ I
         P_c = P_p - K @ H @ P_p
 
-        return (R, Q, x_c, P_c), x_p[:,0]
+        return (Q, R, x_c, P_c), x_p[:,0]
 
     _, ret = lax.scan(step, init_states, signal)
 
-    return ret
+    return ret.T
 
 
 def measure_cd(x, sr, start=-0.25, end=0.25, bins=1000, wavlen=1550e-9):
@@ -243,5 +287,27 @@ def measure_cd(x, sr, start=-0.25, end=0.25, bins=1000, wavlen=1550e-9):
     Dz_hat = Dz_set[jnp.argmin(L)] # estimated accumulated CD
 
     return Dz_hat, L, Dz_set
+
+
+def getpower(x):
+    return jnp.mean(jnp.abs(x)**2, axis=0)
+
+
+def scale_rotate(y, x, testing_phases=4, device=gpus[0]):
+
+    y = device_put(y, device)
+    x = device_put(x, device)
+
+    y = y / jnp.sqrt(getpower(y) / getpower(x))
+
+    TP = jnp.exp(1j * 2 * jnp.pi / testing_phases * jnp.arange(testing_phases))
+
+    def f(y, x):
+        y_t = jnp.outer(y, TP)
+        x_t = jnp.tile(x[:,None], (1, testing_phases))
+        snr_t = 10. * jnp.log10(getpower(y_t) / getpower(y_t - x_t))
+        return TP[jnp.argmax(snr_t)]
+
+    return y * jit(vmap(f, in_axes=-1))(y, x)
 
 

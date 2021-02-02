@@ -1,5 +1,5 @@
 import numpy as np
-from complax import xop
+from commplax import xop
 from scipy import signal
 from functools import partial
 

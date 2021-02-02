@@ -2,7 +2,7 @@ import numpy as np
 import jax
 from jax import lax, jit, vmap, numpy as jnp, device_put
 from jax.ops import index, index_add, index_update
-from complax import src
+from commplax import src
 
 def tddbp_params(
     SR,                        # sample rate
