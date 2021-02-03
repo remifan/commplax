@@ -1,6 +1,8 @@
 import re
 import numpy as np
-from scipy import signal
+import pandas as pd
+from scipy import signal, special
+from commplax import op
 import matplotlib.pyplot as plt
 import quantumrandom
 
@@ -349,11 +351,82 @@ def align_periodic(y, x, begin=0, last=2000, b=0.5):
     return z, np.stack((r0, r1))
 
 
-def qot(y, x):
-    SNR_fn = lambda x, y: 10. * np.log10(getpower(x, False) / getpower(x - y, False))
+def shape_signal(x):
+    x = np.atleast_1d(np.asarray(x))
 
-    # A = int2bit(qamdemod(y, 16), 4).ravel()
-    # B = int2bit(qamdemod(x, 16), 4).ravel()
+    if x.ndim == 1:
+        x = x[..., None]
 
-    return SNR_fn(y, x)
+    return x
+
+
+def qamqot(y, x, count_dim=True, count_total=True, L=None):
+
+    y = shape_signal(y)
+    x = shape_signal(x)
+
+    if L is None:
+        L = len(np.unique(x))
+
+    D = y.shape[-1]
+
+    z = [(a, b) for a, b in zip(y.T, x.T)]
+
+    SNR_fn = lambda y, x: 10. * np.log10(getpower(x, False) / getpower(x - y, False))
+
+    def f(z):
+        y, x = z
+
+        M = np.sqrt(L)
+
+        by = int2bit(qamdemod(y, L), M).ravel()
+        bx = int2bit(qamdemod(x, L), M).ravel()
+
+        BER = np.count_nonzero(by - bx) / len(by)
+        QSq = 20 * np.log10(np.sqrt(2) * special.erfcinv(2 * BER))
+        SNR = SNR_fn(y, x)
+
+        return BER, QSq, SNR
+
+    qot = []
+    ind = []
+    df = None
+
+    if count_dim:
+        qot += list(map(f, z))
+        ind += ['dim' + str(n) for n in range(D)]
+
+    if count_total:
+        qot += [f((y.ravel(), x.ravel()))]
+        ind += ['total']
+
+    if len(qot) > 0:
+        df = pd.DataFrame(qot, columns=['BER', 'QSq', 'SNR'], index=ind)
+
+    return df
+
+
+def qamqot_local(y, x, frame_size=10000, L=None):
+
+    y = shape_signal(y)
+    x = shape_signal(x)
+
+    if L is None:
+        L = len(np.unique(x))
+
+    D = y.shape[-1]
+
+    Y = op.frame(y, frame_size, frame_size, True)
+    X = op.frame(x, frame_size, frame_size, True)
+
+    zf = [(yf, xf) for yf, xf in zip(Y, X)]
+
+    f = lambda z: qamqot(z[0], z[1], count_dim=False, L=L).to_numpy()[0]
+
+    qot_local = np.stack(list(map(f, zf)))
+
+    qot_local = np.repeat(qot_local, frame_size, axis=0) # better interp method?
+
+    return qot_local
+
 

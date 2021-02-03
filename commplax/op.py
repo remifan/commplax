@@ -52,7 +52,7 @@ def frame_prepare(x, flen, fstep, pad_end=False, pad_constants=0):
         fnum = -(-n // fstep) # double negatives to round up
         pad_len = (fnum - 1) * fstep + flen - n
         pad_width = ((0,pad_len),) + ((0,0),) * (x.ndim-1)
-        x = np.pad(x, pad_width)
+        x = np.pad(x, pad_width, 'constant', constant_values=(pad_constants, pad_constants))
     else:
         fnum = 1 + (n - flen) // fstep
         n = (fnum - 1) * fstep + flen
@@ -63,7 +63,7 @@ def frame_prepare(x, flen, fstep, pad_end=False, pad_constants=0):
 
 
 def frame_gen(x, flen, fstep, pad_end=False, pad_constants=0):
-    x, fnum = frame_prepare(x, flen, fstep, pad_end=False, pad_constants=0)
+    x, fnum = frame_prepare(x, flen, fstep, pad_end=pad_end, pad_constants=pad_constants)
 
     s = np.arange(flen)
 
@@ -72,7 +72,7 @@ def frame_gen(x, flen, fstep, pad_end=False, pad_constants=0):
 
 
 def frame(x, flen, fstep, pad_end=False, pad_constants=0):
-    x, fnum = frame_prepare(x, flen, fstep, pad_end=False, pad_constants=0)
+    x, fnum = frame_prepare(x, flen, fstep, pad_end=pad_end, pad_constants=pad_constants)
 
     ind = np.arange(flen)[None,:] + fstep * np.arange(fnum)[:,None]
     return x[ind,...]
