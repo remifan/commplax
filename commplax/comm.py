@@ -241,6 +241,14 @@ def resample(x, p, q, axis=0):
     return signal.resample_poly(x, p//gcd, q//gcd, axis=axis)
 
 
+def shape_signal(x):
+    x = np.atleast_1d(np.asarray(x))
+
+    if x.ndim == 1:
+        x = x[..., None]
+
+    return x
+
 def getpower(x, real=False):
     ''' get signal power '''
     if real:
@@ -316,7 +324,7 @@ def dbp_params(
     return H, h_casual, phi
 
 
-def align_periodic(y, x, begin=0, last=2000, b=0.5):
+def align_periodic(y, x, begin=0, last=1000, b=0.5):
 
     z = np.zeros_like(x)
 
@@ -351,15 +359,6 @@ def align_periodic(y, x, begin=0, last=2000, b=0.5):
     return z, np.stack((r0, r1))
 
 
-def shape_signal(x):
-    x = np.atleast_1d(np.asarray(x))
-
-    if x.ndim == 1:
-        x = x[..., None]
-
-    return x
-
-
 def qamqot(y, x, count_dim=True, count_total=True, L=None):
 
     y = shape_signal(y)
@@ -383,7 +382,8 @@ def qamqot(y, x, count_dim=True, count_total=True, L=None):
         bx = int2bit(qamdemod(x, L), M).ravel()
 
         BER = np.count_nonzero(by - bx) / len(by)
-        QSq = 20 * np.log10(np.sqrt(2) * special.erfcinv(2 * BER))
+        with np.errstate(divide='ignore'):
+            QSq = 20 * np.log10(np.sqrt(2) * np.maximum(special.erfcinv(2 * BER), 0.))
         SNR = SNR_fn(y, x)
 
         return BER, QSq, SNR
@@ -414,8 +414,6 @@ def qamqot_local(y, x, frame_size=10000, L=None):
     if L is None:
         L = len(np.unique(x))
 
-    D = y.shape[-1]
-
     Y = op.frame(y, frame_size, frame_size, True)
     X = op.frame(x, frame_size, frame_size, True)
 
@@ -425,8 +423,30 @@ def qamqot_local(y, x, frame_size=10000, L=None):
 
     qot_local = np.stack(list(map(f, zf)))
 
-    qot_local = np.repeat(qot_local, frame_size, axis=0) # better interp method?
+    qot_local_ip = np.repeat(qot_local, frame_size, axis=0) # better interp method?
 
-    return qot_local
+    return qot_local_ip
+
+
+def corr_local(y, x, frame_size=10000, L=None):
+
+    y = shape_signal(y)
+    x = shape_signal(x)
+
+    if L is None:
+        L = len(np.unique(x))
+
+    Y = op.frame(y, frame_size, frame_size, True)
+    X = op.frame(x, frame_size, frame_size, True)
+
+    zf = [(yf, xf) for yf, xf in zip(Y, X)]
+
+    f = lambda z: np.abs(np.sum(z[0] * z[1].conj(), axis=0))
+
+    qot_local = np.stack(list(map(f, zf)))
+
+    qot_local_ip = np.repeat(qot_local, frame_size, axis=0) # better interp method?
+
+    return qot_local_ip
 
 

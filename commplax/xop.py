@@ -55,6 +55,31 @@ def _fft_size_factor(x, gpf):
     return x
 
 
+def correlate(a, v):
+    '''
+    mode = 'same'
+    NOTE: jnp.correlate() does not support complex inputs
+    '''
+    a = device_put(a)
+    v = device_put(v)
+    return conv1d_lax(a, v[::-1].conj())
+
+
+def correlate_fft(a, v):
+    '''
+    mode = 'same'
+    c_{av}[k] = sum_n a[n+k] * conj(v[n])
+    '''
+    a = device_put(a)
+    v = device_put(v)
+
+    fft = jnp.fft.fft
+    ifft = jnp.fft.ifft
+    fftshift = jnp.fft.fftshift
+
+    return fftshift(ifft(fft(a) * fft(v).conj()))
+
+
 def conv1d_oa_fftsize(signal_length, kernel_length, oa_factor=8, max_fft_prime_factor=5):
     target_fft_size = kernel_length * oa_factor
     if target_fft_size < signal_length:

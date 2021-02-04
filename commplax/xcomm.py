@@ -80,6 +80,17 @@ def mimo(w, u):
     return v
 
 
+@partial(jit, static_argnums=(0,))
+def jitted_scan(f, init, xs):
+    '''
+    "NOTE: ``scan`` is known to cause memory leaks when not called within a jitted"
+    "https://github.com/google/jax/issues/3158#issuecomment-631851006"
+    "https://github.com/google/jax/pull/5029/commits/977c9c40efa378d1321a7dd8c712af528939ed5f"
+    "https://github.com/google/jax/pull/5029"
+    '''
+    return lax.scan(f, init, xs)
+
+
 def cma(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
 
     d = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
@@ -89,7 +100,7 @@ def cma(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0
     lr = device_put(lr, device)
     d = device_put(d, device)
 
-    _, w = lax.scan(step_cma, (w_init, d, lr), y_f)
+    _, w = jitted_scan(step_cma, (w_init, d, lr), y_f)
     return w
 
 
@@ -107,13 +118,13 @@ def loss_cma(w, u, d):
     return l
 
 
-def mu_cma(y_f, w_init, lr=1e-4, alpha=0.999, const=src.const("16QAM", norm=True), device=cpus[0]):
+def mu_cma(y_f, w_init, lr=1e-4, alpha=0.9999, const=src.const("16QAM", norm=True), device=cpus[0]):
     d = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
 
-    ntap = w_init.shape[0]
+    ntap = w_init.shape[-1]
     nch = y_f.shape[-1]
     z  = jnp.zeros((ntap, nch), dtype=y_f.dtype)
-    c  = jnp.zeros((nch, nch, ntap, ntap), dtype=y_f.dtype)
+    c  = jnp.zeros((nch, nch, ntap), dtype=y_f.dtype)
 
     y_f = device_put(y_f, device)
     w_init = device_put(w_init, device)
@@ -121,8 +132,18 @@ def mu_cma(y_f, w_init, lr=1e-4, alpha=0.999, const=src.const("16QAM", norm=True
     alpha = device_put(alpha, device)
     d = device_put(d, device)
 
-    _, w = lax.scan(step_mu_cma, (w_init, d, c, z, alpha, lr), y_f)
+    _, w = jitted_scan(step_mu_cma, (w_init, d, c, z, alpha, lr), y_f)
     return w
+
+
+def loss_mu_cma(w, d, c, u):
+
+    c_sqsum = jnp.sum(jnp.abs(c)**2, axis=-1)
+    xcorr_l = jnp.sum(c_sqsum) - jnp.sum(jnp.diag(c_sqsum))
+
+    cma_l = loss_cma(w, u, d)
+
+    return  cma_l + 2 * xcorr_l
 
 
 @jit
@@ -130,37 +151,25 @@ def step_mu_cma(carry, u):
     (w, d, c, z, a, lr) = carry
     v = mimo(w, u)[None,:]
     z = jnp.concatenate((v, z[:-1,:]))
-    g = grad(loss_mu_cma)(w, d, c, z, a, u).conj()
-    w = w - lr * g
-    return (w, d, c, z, a, lr), w
 
-
-def loss_mu_cma(w, d, c, z, a, u):
     nch = z.shape[-1]
     z0 = jnp.repeat(z, nch, axis=-1)
     z1 = jnp.tile(z, (1, nch))
-
-    corr_fn = vmap(lambda z0i, z1i: jnp.outer(z0i, z1i.conj()), in_axes=-1, out_axes=0)
-
+    corr_fn = vmap(lambda z0i, z1i: xop.correlate_fft(z0i, z1i), in_axes=-1, out_axes=0)
     corr_flat = corr_fn(z0, z1)
-
-    corr = jnp.reshape(corr_flat, (nch,) * 4)
-
+    corr = jnp.reshape(corr_flat, c.shape)
     c = a * c + (1 - a) * corr
-    c_l2norm = jnp.abs(c)**2
-    corr_suml2norm = jnp.sum(c_l2norm, axis=(-2,-1))
-    sum_xcorr = jnp.sum(corr_suml2norm) - jnp.sum(jnp.diag(corr_suml2norm))
 
-    cma_l = loss_cma(w, u, d)
-
-    return  cma_l + sum_xcorr
+    g = grad(loss_mu_cma)(w, d, c, u).conj()
+    w = w - lr * g
+    return (w, d, c, z, a, lr), w
 
 
 def loss_lms(v, x, np=jnp):
     return np.sum(np.abs(x - v)**2)
 
 
-def cpane_ekf(signal, beta=0.95, device=cpus[0]):
+def cpane_ekf(signal, beta=0.9, device=cpus[0]):
     '''
     References:
     [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
@@ -194,7 +203,7 @@ def cpane_ekf(signal, beta=0.95, device=cpus[0]):
 
         return (Q, R, Psi_c, P_c, Psi_a), Psi_c
 
-    _, ret = lax.scan(step, init_states, signal)
+    _, ret = jitted_scan(step, init_states, signal)
 
     return ret
 
@@ -253,7 +262,7 @@ def cpr_foe_ekf(signal, init_states=None, device=cpus[0]):
 
         return (Q, R, x_c, P_c), x_p[:,0]
 
-    _, ret = lax.scan(step, init_states, signal)
+    _, ret = jitted_scan(step, init_states, signal)
 
     return ret.T
 
@@ -280,7 +289,7 @@ def measure_cd(x, sr, start=-0.25, end=0.25, bins=1000, wavlen=1550e-9):
     # the speed has a lowerbound e.g 600ms at bins=1, possiblely related to the blind
     # migration of `frft` from Github :) (could frft be jitted in theory?).
     # TODO review `frft`
-    _, L = lax.scan(f, None, p)
+    _, L = jitted_scan(f, None, p)
 
     B2z = jnp.tan(jnp.pi/2 - (p - 1) / 2 * jnp.pi)/(sr * 2 * jnp.pi / N * sr)
     Dz_set  = -B2z / wavlen**2 * 2 * jnp.pi * c # the swept set of CD metrics
