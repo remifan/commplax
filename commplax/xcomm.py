@@ -75,13 +75,8 @@ def foe_4s(x, sr=2*jnp.pi):
     return fo_hat, h
 
 
-def mimo(w, u):
-    v = jnp.einsum('ijt,tj->i', w, u)
-    return v
-
-
 @partial(jit, static_argnums=(0,))
-def jitted_scan(f, init, xs):
+def scan(f, init, xs):
     '''
     "NOTE: ``scan`` is known to cause memory leaks when not called within a jitted"
     "https://github.com/google/jax/issues/3158#issuecomment-631851006"
@@ -89,6 +84,84 @@ def jitted_scan(f, init, xs):
     "https://github.com/google/jax/pull/5029"
     '''
     return lax.scan(f, init, xs)
+
+
+def mimo(w, u):
+    v = jnp.einsum('ijt,tj->i', w, u) # no dimension axis
+    return v
+
+
+def dd_lms(signal, w_init, data=None, train=None, const=src.const("16QAM", norm=True), device=cpus[0]):
+    '''
+    Impl. follows Fig. 6 in [1]
+    References:
+    [1] Mori, Y., Zhang, C. and Kikuchi, K., 2012. Novel configuration of finite-impulse-response
+    filters tolerant to carrier-phase fluctuations in digital coherent optical receivers for
+    higher-order quadrature amplitude modulation signals. Optics express, 20(24), pp.26236-26251.
+    '''
+
+    if train is None:
+        train = np.full((signal.shape[0],), False)
+        data = np.full((signal.shape[0],), 0, dtype=const.dtype)
+    else:
+        if train.shape[0] != signal.shape[0] or data.shape[0] != signal.shape[0]:
+            raise ValueError('invalid shape')
+
+    dims = signal.shape[-1]
+    f_init = np.full((dims,), const[0], dtype=const.dtype) # dummy initial value
+    s_init = np.full((dims,), const[0], dtype=const.dtype) # dummy initial value
+    params = (1/2**8, 1/2**7, 1/2**8, f_init, s_init, 1e-12, w_init, const)
+    inputs = (signal, data, train)
+
+    params = device_put(params, device)
+    inputs = device_put(inputs, device)
+
+    ret = _dd_lms(params, inputs)
+
+    return ret
+
+
+@jit
+def _dd_lms(params, inputs):
+    _, ret = lax.scan(step_dd_lms, params, inputs)
+
+    return ret
+
+
+def step_dd_lms(params, inputs):
+    mu_p, mu_f, mu_s, f, s, eps, w, const = params
+    u, x, train = inputs
+
+    v = mimo(w, u)
+
+    z = v * f * s
+
+    d = lax.cond(
+        train,
+        None,
+        lambda _: x,
+        None,
+        lambda _: const[jnp.argmin(jnp.abs(const[:,None] - z[None,:]), axis=0)]
+    )
+
+    dd_err = x - d
+
+    psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
+    e_p = d * psi_hat  - v
+    e_f = d - f * v
+    e_s = d - s * f  * v
+
+    outputs = (w, psi_hat, dd_err)
+
+    # update
+    s = s + mu_s / (jnp.abs(f * v)**2 + eps) * e_s * (f * v).conj()
+    f = f + mu_f / (jnp.abs(v)**2 + eps) * e_f * v.conj()
+    grad = e_p[:, None, None] * u.conj().T[None, ...]
+    w = w + mu_p * grad
+
+    params = (mu_p, mu_f, mu_s, f, s, eps, w, const)
+
+    return params, outputs
 
 
 def cma(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
@@ -100,16 +173,16 @@ def cma(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0
     lr = device_put(lr, device)
     d = device_put(d, device)
 
-    _, w = jitted_scan(step_cma, (w_init, d, lr), y_f)
-    return w
+    _, ret = scan(step_cma, (w_init, d, lr), y_f)
+    return ret
 
 
 @jit
 def step_cma(carry, u):
     w, d, lr = carry
-    g = grad(loss_cma)(w, u, d).conj()
-    w = w - lr * g
-    return (w, d, lr), w
+    l, g = value_and_grad(loss_cma)(w, u, d)
+    w = w - lr * g.conj()
+    return (w, d, lr), (l, w)
 
 
 def loss_cma(w, u, d):
@@ -132,7 +205,7 @@ def mu_cma(y_f, w_init, lr=1e-4, alpha=0.9999, const=src.const("16QAM", norm=Tru
     alpha = device_put(alpha, device)
     d = device_put(d, device)
 
-    _, w = jitted_scan(step_mu_cma, (w_init, d, c, z, alpha, lr), y_f)
+    _, w = scan(step_mu_cma, (w_init, d, c, z, alpha, lr), y_f)
     return w
 
 
@@ -165,11 +238,55 @@ def step_mu_cma(carry, u):
     return (w, d, c, z, a, lr), w
 
 
-def loss_lms(v, x, np=jnp):
-    return np.sum(np.abs(x - v)**2)
+def lms_cpane(signal, w_init, data=None, train=None, lr=1e-3, beta=0.9, device=cpus[0]):
+    const = src.const("16QAM", norm=True)
+
+    if train is None:
+        train = np.full((signal.shape[0],), False)
+        data = np.full((signal.shape[0],), 0, dtype=const.dtype)
+
+    params_lms = (w_init, lr)
+    params_cpane = (1e-4 * (1.+1j), 1e-2 * (1.+1j), 0j, 1j, 0j, beta, const)
+    params = params_lms + params_cpane
+    inputs = (signal, data, train)
+
+    params = device_put(params, device)
+    inputs = device_put(inputs, device)
+
+    _, w = step_lms_cpane(params, inputs)
+
+    return w
 
 
-def cpane_ekf(signal, beta=0.9, device=cpus[0]):
+@jit
+def step_lms_cpane(params, inputs):
+
+    u, x, train = inputs
+
+    params_lms, params_cpane = (params[:2], params[2:])
+    w, lr = params_lms
+
+    v = mimo(w, u)[None,:]
+
+    params_cpane, outputs_cpane= step_cpane_ekf(params_cpane, (v, x, train))
+
+    psi_hat = outputs_cpane[0]
+
+    t = v * jnp.exp(-1j * psi_hat)
+
+    l, g = value_and_grad(loss_lms)(t, x)
+    w = w - lr * g.conj()
+
+    params = (w, lr) + params_cpane
+
+    return params, (l, w)
+
+
+def loss_lms(v, x):
+    return jnp.sum(jnp.abs(x - v)**2)
+
+
+def cpane_ekf(signal, data=None, train=None, beta=0.9, device=cpus[0]):
     '''
     References:
     [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
@@ -177,35 +294,58 @@ def cpane_ekf(signal, beta=0.9, device=cpus[0]):
     '''
     const = src.const("16QAM", norm=True)
 
-    init_states = (1e-4 * (1.+1j), 1e-2 * (1.+1j), 0j, 1j, 0j)
+    if train is None:
+        train = np.full((signal.shape[0],), False)
+        data = np.full((signal.shape[0],), 0, dtype=const.dtype)
 
-    signal = device_put(signal, device)
-    init_states = device_put(init_states, device)
-    const = device_put(const, device)
+    params = (1e-4 * (1.+1j), 1e-2 * (1.+1j), 0j, 1j, 0j, beta, const)
+    inputs = (signal, data, train)
 
-    @jit
-    def step(states, r):
-        Q, R, Psi_c, P_c, Psi_a = states
+    params = device_put(params, device)
+    inputs = device_put(inputs, device)
 
-        Psi_p = Psi_c
-        P_p = P_c + Q
+    psi_hat = _cpane_ekf(params, inputs)
 
-        Psi_a = beta * Psi_a + (1 - beta) * Psi_c
+    return psi_hat
 
-        t = r * jnp.exp(-1j * Psi_a)
-        d = const[jnp.argmin(jnp.abs(const - t))]
 
-        H = 1j * d * jnp.exp(1j * Psi_p)
-        K = P_p * H.conj() / (H * P_p * H.conj() + R)
-        v = r - d * jnp.exp(1j * Psi_p)
-        Psi_c = Psi_p + K * v
-        P_c = (1. - K * H) * P_p
+@jit
+def _cpane_ekf(params, inputs):
+    _, ret = lax.scan(step_cpane_ekf, params, inputs)
+    psi_hat = ret[0]
 
-        return (Q, R, Psi_c, P_c, Psi_a), Psi_c
+    return psi_hat
 
-    _, ret = jitted_scan(step, init_states, signal)
 
-    return ret
+@jit
+def step_cpane_ekf(params, inputs):
+    Q, R, Psi_c, P_c, Psi_a, beta, const = params
+    r, x, train = inputs
+
+    Psi_p = Psi_c
+    P_p = P_c + Q
+
+    Psi_a = beta * Psi_a + (1 - beta) * Psi_c
+
+    d = lax.cond(
+        train,
+        None,
+        lambda _: x, # data-aided mode
+        None,
+        lambda _: const[jnp.argmin(jnp.abs(const - r * jnp.exp(-1j * Psi_a)))]) # decision directed mode
+
+    H = 1j * d * jnp.exp(1j * Psi_p)
+    K = P_p * H.conj() / (H * P_p * H.conj() + R)
+    v = r - d * jnp.exp(1j * Psi_p)
+
+    outputs = (Psi_c,)
+
+    Psi_c = Psi_p + K * v
+    P_c = (1. - K * H) * P_p
+
+    params = (Q, R, Psi_c, P_c, Psi_a, beta, const)
+
+    return params, outputs
 
 
 def cpr_foe_ekf(signal, init_states=None, device=cpus[0]):
@@ -223,11 +363,11 @@ def cpr_foe_ekf(signal, init_states=None, device=cpus[0]):
     if init_states is None:
         init_states = (
           jnp.array([[1e-4,  0],
-                     [0,  1e-9]]),
-          1e-1 * jnp.eye(2),
+                     [0,  1e-8]]),
+          1e-2 * jnp.eye(2),
           jnp.array([[0.],
                     [0.]]),
-          jnp.eye(2)
+          1. * jnp.eye(2)
         )
 
     A = jnp.array([[1, 1],
@@ -262,7 +402,7 @@ def cpr_foe_ekf(signal, init_states=None, device=cpus[0]):
 
         return (Q, R, x_c, P_c), x_p[:,0]
 
-    _, ret = jitted_scan(step, init_states, signal)
+    _, ret = scan(step, init_states, signal)
 
     return ret.T
 
@@ -289,7 +429,7 @@ def measure_cd(x, sr, start=-0.25, end=0.25, bins=1000, wavlen=1550e-9):
     # the speed has a lowerbound e.g 600ms at bins=1, possiblely related to the blind
     # migration of `frft` from Github :) (could frft be jitted in theory?).
     # TODO review `frft`
-    _, L = jitted_scan(f, None, p)
+    _, L = scan(f, None, p)
 
     B2z = jnp.tan(jnp.pi/2 - (p - 1) / 2 * jnp.pi)/(sr * 2 * jnp.pi / N * sr)
     Dz_set  = -B2z / wavlen**2 * 2 * jnp.pi * c # the swept set of CD metrics
