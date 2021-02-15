@@ -75,15 +75,21 @@ def foe_4s(x, sr=2*jnp.pi):
     return fo_hat, h
 
 
-@partial(jit, static_argnums=(0,))
-def scan(f, init, xs):
+def scan(f, init, xs, unroll=1):
     '''
     "NOTE: ``scan`` is known to cause memory leaks when not called within a jitted"
     "https://github.com/google/jax/issues/3158#issuecomment-631851006"
     "https://github.com/google/jax/pull/5029/commits/977c9c40efa378d1321a7dd8c712af528939ed5f"
     "https://github.com/google/jax/pull/5029"
+    "NOTE": ``scan`` runs much slower on GPU than CPU if loop iterations are small
+    "https://github.com/google/jax/issues/2491"
+    "https://github.com/google/jax/pull/3076"
     '''
-    return lax.scan(f, init, xs)
+    @partial(jit, static_argnums=(0,3))
+    def _scan(f, init, xs, unroll):
+        return lax.scan(f, init, xs, unroll=unroll)
+
+    return _scan(f, init, xs, unroll)
 
 
 def mimo(w, u):
@@ -110,7 +116,7 @@ def dd_lms(signal, w_init, data=None, train=None, const=src.const("16QAM", norm=
     dims = signal.shape[-1]
     f_init = np.full((dims,), const[0], dtype=const.dtype) # dummy initial value
     s_init = np.full((dims,), const[0], dtype=const.dtype) # dummy initial value
-    params = (1/2**8, 1/2**7, 1/2**8, f_init, s_init, 1e-12, w_init, const)
+    params = (1/2**13, 1/2**8, 1/2**10, f_init, s_init, 1e-12, w_init, const)
     inputs = (signal, data, train)
 
     params = device_put(params, device)
@@ -144,14 +150,12 @@ def step_dd_lms(params, inputs):
         lambda _: const[jnp.argmin(jnp.abs(const[:,None] - z[None,:]), axis=0)]
     )
 
-    dd_err = x - d
-
     psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
     e_p = d * psi_hat  - v
     e_f = d - f * v
     e_s = d - s * f  * v
 
-    outputs = (w, psi_hat, dd_err)
+    outputs = (w, psi_hat, d)
 
     # update
     s = s + mu_s / (jnp.abs(f * v)**2 + eps) * e_s * (f * v).conj()
@@ -166,28 +170,194 @@ def step_dd_lms(params, inputs):
 
 def cma(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
 
-    d = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
+    R2 = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
 
-    y_f = device_put(y_f, device)
-    w_init = device_put(w_init, device)
-    lr = device_put(lr, device)
-    d = device_put(d, device)
+    params = (w_init, R2, lr)
+    inputs = (y_f,)
 
-    _, ret = scan(step_cma, (w_init, d, lr), y_f)
+    params = device_put(params, device)
+    inputs = device_put(inputs, device)
+
+    _, ret = scan(step_cma, params, inputs)
+
     return ret
 
 
 @jit
-def step_cma(carry, u):
-    w, d, lr = carry
-    l, g = value_and_grad(loss_cma)(w, u, d)
+def step_cma(params, inputs):
+    w, R2, lr = params
+    u, = inputs
+
+    l, g = value_and_grad(loss_cma)(w, u, R2)
+
+    outputs = (l, w)
+
     w = w - lr * g.conj()
-    return (w, d, lr), (l, w)
+
+    params = (w, R2, lr)
+
+    return params, outputs
 
 
-def loss_cma(w, u, d):
+def loss_cma(w, u, R2):
     v = mimo(w, u)
-    l = jnp.sum(jnp.abs(d - jnp.abs(v)**2))
+    l = jnp.sum(jnp.abs(R2 - jnp.abs(v)**2))
+    return l
+
+
+def rls_cma(y_f, w_init, beta=0.9999, delta=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
+    '''
+    References:
+    [1] Faruk, M.S. and Savory, S.J., 2017. Digital signal processing for coherent
+    transceivers employing multilevel formats. Journal of Lightwave Technology, 35(5), pp.1125-1141.
+    '''
+
+    R2 = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
+
+    N = y_f.shape[0]
+    taps = w_init.shape[-1]
+    dims = w_init.shape[0]
+    # w_init: DxDxT -> DTxD
+    w_init = jnp.reshape(w_init.conj(), (dims, dims * taps)).T
+    cI = jnp.eye(dims * taps, dtype=y_f.dtype)
+    P_init = delta * jnp.tile(cI[...,None], (1, 1, dims))
+    y_f = jnp.reshape(y_f, (N, -1), order='F')
+
+    params = (w_init, P_init, R2, beta)
+    inputs = (y_f,)
+
+    params = device_put(params, device)
+    inputs = device_put(inputs, device)
+
+    _, ret = scan(step_rls_cma, params, inputs, unroll=8)
+
+    l, w = ret
+
+    # w: NxDTxD -> NxDxDT
+    w = jnp.moveaxis(w, 0, -1).T
+    # w: NxDxDT -> NxDxDxT
+    w = jnp.reshape(w, (N, dims, dims, taps)).conj()
+
+    return l, w
+
+
+@jit
+def step_rls_cma(params, inputs):
+    h, P, R2, beta = params
+    u, = inputs
+    bi = 1 / beta
+
+    def f(u, h, P):
+        u = u[:,None]
+        h = h[:,None]
+
+        z = u @ u.T.conj() @ h
+        k = bi * P @ z / (1 + bi * z.T.conj() @ P @ z)
+        e = R2 - h.T.conj() @ z
+        h = h + k @ e.conj()
+        P = bi * P - bi * k @ z.T.conj() @ P
+
+        h = h[:,0]
+        return e, h, P
+
+    # we could also push vmap to outter function
+    fv = jit(vmap(f, in_axes=(None, -1, -1), out_axes=-1))
+
+    h_old = h
+
+    e, h, P = fv(u, h, P)
+
+    outputs = (e, h_old)
+
+    params = (h, P, R2, beta)
+
+    return params, outputs
+
+
+def cma_2sec(y_f, h_init, w_init, mu1=1e-4, mu2=1e-1, const=src.const("16QAM", norm=True), device=cpus[0]):
+
+    R2 = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
+
+    params = (h_init, w_init, mu1, mu2, R2)
+    inputs = (y_f,)
+
+    params = device_put(params, device)
+    inputs = device_put(inputs, device)
+
+    _, ret = scan(step_cma_2sec, params, inputs)
+    return ret
+
+
+def mimo_2sec(h, w, u):
+    c = jnp.array([[w[0], w[1]], [-w[1].conj(), w[0].conj()]])
+    z = jnp.einsum('ij,ij->j', h, u)
+    v = jnp.einsum('ij,j->i', c, z)
+    return v
+
+
+@jit
+def step_cma_2sec(params, inputs):
+    h, w, mu1, mu2, R2 = params
+    u, = inputs
+
+    def loss_fn(P, u):
+        h, w = P
+        v = mimo_2sec(h, w, u)
+        l = jnp.sum(jnp.abs(R2 - jnp.abs(v)**2))
+        return l
+
+    P = (h, w)
+    l, G = value_and_grad(loss_fn)(P, u)
+
+    outputs = (l, h, w)
+
+    g1, g2 = G
+    h = h - mu1 * g1.conj()
+    w = w - mu2 * g2.conj()
+
+    params = (h, w, mu1, mu2, R2)
+
+    return params, outputs
+
+
+def rde(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
+    '''
+    References:
+    [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and carrier phase recovery
+        in a 16-QAM optical coherent system. Journal of lightwave technology, 27(15), pp.3042-3049.
+    '''
+    Rs = np.unique(np.abs(const))
+
+    params = (w_init, lr, Rs)
+    inputs = (y_f,)
+
+    params = device_put(params, device)
+    inputs = device_put(inputs, device)
+
+    _, ret = scan(step_rde, params, inputs)
+    return ret
+
+
+@jit
+def step_rde(params, inputs):
+    w, lr, Rs = params
+    u, = inputs
+
+    l, g = value_and_grad(loss_rde)(w, u, Rs)
+
+    outputs = (l, w)
+
+    w = w - lr * g.conj()
+
+    params = (w, lr, Rs)
+
+    return params, outputs
+
+
+def loss_rde(w, u, Rs):
+    v = mimo(w, u)[None,:]
+    R2 = Rs[jnp.argmin(jnp.abs(Rs[:,None] * v / jnp.abs(v) - v), axis=0)]**2
+    l = jnp.sum(jnp.abs(R2 - jnp.abs(v[0,:])**2))
     return l
 
 
@@ -238,6 +408,26 @@ def step_mu_cma(carry, u):
     return (w, d, c, z, a, lr), w
 
 
+def lsad_cma(params, inputs):
+    # mu_p, mu_f, mu_s, f, s, eps, w, const = params
+    # u, x, train = inputs
+
+    # v = mimo(w, u)
+
+    # R = beta * R + (1 - beta) * (v[:,None] * v[None,:].conj())
+    # P = beta * P + (1 - beta) * (u[:,None].conj() * v[None,:])
+
+    # outputs = (w, psi_hat, dd_err)
+
+    # # update
+    # w = w - lr * 
+    # w = w + mu_p * grad
+
+    # params = (mu_p, mu_f, mu_s, f, s, eps, w, const)
+
+    return params, outputs
+
+
 def lms_cpane(signal, w_init, data=None, train=None, lr=1e-3, beta=0.9, device=cpus[0]):
     const = src.const("16QAM", norm=True)
 
@@ -246,7 +436,7 @@ def lms_cpane(signal, w_init, data=None, train=None, lr=1e-3, beta=0.9, device=c
         data = np.full((signal.shape[0],), 0, dtype=const.dtype)
 
     params_lms = (w_init, lr)
-    params_cpane = (1e-4 * (1.+1j), 1e-2 * (1.+1j), 0j, 1j, 0j, beta, const)
+    params_cpane = (1e-4 * (1.+1j), 1e-1 * (1.+1j), 0j, 1j, 0j, beta, const)
     params = params_lms + params_cpane
     inputs = (signal, data, train)
 
@@ -286,7 +476,7 @@ def loss_lms(v, x):
     return jnp.sum(jnp.abs(x - v)**2)
 
 
-def cpane_ekf(signal, data=None, train=None, beta=0.9, device=cpus[0]):
+def cpane_ekf(signal, data=None, train=None, beta=0.8, device=cpus[0]):
     '''
     References:
     [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
@@ -362,8 +552,8 @@ def cpr_foe_ekf(signal, init_states=None, device=cpus[0]):
 
     if init_states is None:
         init_states = (
-          jnp.array([[1e-4,  0],
-                     [0,  1e-8]]),
+          jnp.array([[1e-3,  0],
+                     [0,  1e-7]]),
           1e-2 * jnp.eye(2),
           jnp.array([[0.],
                     [0.]]),
@@ -405,6 +595,44 @@ def cpr_foe_ekf(signal, init_states=None, device=cpus[0]):
     _, ret = scan(step, init_states, signal)
 
     return ret.T
+
+
+def cpr_ekf(signal, init_states=None, device=cpus[0]):
+    Q = 3.0e-5 * np.eye(1)
+    R = 2.0e-2 * np.eye(2)
+    const = src.const("16QAM", norm=True)
+
+    P_corr = np.array([[1.]])
+    phi_corr = np.array([[0.]])
+
+    init_states = (Q, R, phi_corr, P_corr)
+
+    init_states = device_put(init_states, device)
+    const = device_put(const, device)
+
+    @jit
+    def step(states, r):
+        Q, R, phi_corr, P_corr = states
+        phi_pred = phi_corr
+        P_pred = P_corr + Q
+
+        phi_pred_C = jnp.exp(1j * phi_pred[0,0])
+        s_hat = const[jnp.argmin(jnp.abs(const - r * phi_pred_C.conj()))]
+        r_hat_pred = s_hat * phi_pred_C
+
+        H_C = 1j * r_hat_pred
+        H = jnp.array([[H_C.real], [H_C.imag]])
+        I = jnp.array([[(r - r_hat_pred).real], [(r - r_hat_pred).imag]])
+        S = H @ P_pred @ H.T + R
+        K = P_pred @ H.T @ jnp.linalg.inv(S)
+        phi_corr = phi_pred + K @ I
+        P_corr = P_pred - K @ H @ P_pred
+
+        return (Q, R, phi_corr, P_corr), phi_pred[0,0]
+
+    _, ret = scan(step, init_states, signal)
+
+    return ret
 
 
 def measure_cd(x, sr, start=-0.25, end=0.25, bins=1000, wavlen=1550e-9):
@@ -458,5 +686,47 @@ def scale_rotate(y, x, testing_phases=4, device=gpus[0]):
         return TP[jnp.argmax(snr_t)]
 
     return y * jit(vmap(f, in_axes=-1))(y, x)
+
+
+def corr_local(y, x, frame_size=2000, L=None, device=gpus[0]):
+    y = device_put(y, device)
+    x = device_put(x, device)
+
+    if L is None:
+        L = len(np.unique(x))
+
+    Y = xop.frame(y, frame_size, frame_size, True)
+    X = xop.frame(x, frame_size, frame_size, True)
+
+    lag = jnp.arange(-(frame_size-1)//2, (frame_size+1)//2)
+
+    corr_v = vmap(lambda a, b: xop.correlate_fft(a, b), in_axes=-1, out_axes=-1)
+
+    def f(_, z):
+        y, x = z
+        c = jnp.abs(corr_v(y, x))
+        return _, lag[jnp.argmax(c, axis=0)]
+
+    _, ret = scan(f, None, (Y, X))
+
+    return ret
+
+
+def foe_local(y, frame_size=16384, frame_step=2000, device=cpus[0]):
+    y = device_put(y, device)
+
+    Y = xop.frame(y, frame_size, frame_step, True)
+
+    def foe(carray, y):
+        fo_hat, _ = foe_4s(y)
+        return carray, fo_hat
+
+    _, fo_hat = scan(foe, None, Y)
+
+    kernel = jnp.array([1.] * frame_step) / frame_step
+    convv = vmap(lambda x, h: xop.fftconvolve(x, h, mode='same').real, in_axes=(-1, None), out_axes=-1)
+    fo_hat_smooth = convv(jnp.repeat(fo_hat, frame_step, axis=0), kernel)
+
+    return fo_hat_smooth[:y.shape[0]]
 
 

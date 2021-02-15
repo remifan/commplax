@@ -154,7 +154,7 @@ def _frame_pad(array, flen, fstep, pad_constants):
     fnum = -(-n // fstep) # double negatives to round up
     pad_len = (fnum - 1) * fstep + flen - n
     pad_width = ((0,pad_len),) + ((0,0),) * (array.ndim-1)
-    array = jnp.pad(array, pad_width, mode="constants", constant_values=pad_constants)
+    array = jnp.pad(array, pad_width, constant_values=pad_constants)
 
     ind = jnp.arange(flen)[None,:] + fstep * jnp.arange(fnum)[:,None]
     return array[ind,...]
@@ -234,8 +234,22 @@ def overlap_and_add(array, frame_step):
     return array
 
 
+def fftconvolve(x, h, mode='full'):
+    mode = mode.lower()
+
+    y = _fftconvolve(x, h)
+
+    if mode == 'full':
+        return y
+    elif mode == 'same':
+        T = h.shape[0]
+        return y[(T-1)//2:(T-1)//2-T+1]
+    else:
+        raise ValueError('invalid mode')
+
+
 @jit
-def fftconvolve(x, h):
+def _fftconvolve(x, h):
     fft = jnp.fft.fft
     ifft = jnp.fft.ifft
 

@@ -419,13 +419,13 @@ def qamqot_local(y, x, frame_size=10000, L=None):
 
     zf = [(yf, xf) for yf, xf in zip(Y, X)]
 
-    f = lambda z: qamqot(z[0], z[1], count_dim=False, L=L).to_numpy()[0]
+    f = lambda z: qamqot(z[0], z[1], count_dim=True, L=L).to_numpy()
 
     qot_local = np.stack(list(map(f, zf)))
 
     qot_local_ip = np.repeat(qot_local, frame_size, axis=0) # better interp method?
 
-    return qot_local_ip
+    return {'BER': qot_local_ip[...,0], 'QSq': qot_local_ip[...,1], 'SNR': qot_local_ip[...,2]}
 
 
 def corr_local(y, x, frame_size=10000, L=None):
