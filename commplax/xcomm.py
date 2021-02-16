@@ -16,6 +16,7 @@ def dbp_model_general(y, steps, h, c):
     c = device_put(c)
 
     D = jit(vmap(lambda y,h: xop.conv1d_fft_oa(y, h, mode='SAME'), in_axes=1, out_axes=1))
+    # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1))
     N = jit(lambda y,c: y * jnp.exp(1j * (abs(y)**2 @ c)))
 
     for i in range(steps):
@@ -42,9 +43,7 @@ def tddbp_2d(y, h, c):
     return y
 
 
-def dbp_model_direct(y, H, c):
-    niter = len(c)
-
+def dbp_model_direct(y, steps, H, c):
     y = device_put(y)
     H = device_put(H)
     c = device_put(c)
@@ -55,7 +54,7 @@ def dbp_model_direct(y, H, c):
     D = jit(lambda y,H: ifft(fft(y) * H))
     N = jit(lambda y,c: y * jnp.exp(1j * (abs(y)**2 @ c)))
 
-    for i in range(niter):
+    for i in range(steps):
         y = D(y, H[i])
         y = N(y, c[i])
 
@@ -488,7 +487,7 @@ def cpane_ekf(signal, data=None, train=None, beta=0.8, device=cpus[0]):
         train = np.full((signal.shape[0],), False)
         data = np.full((signal.shape[0],), 0, dtype=const.dtype)
 
-    params = (1e-4 * (1.+1j), 1e-2 * (1.+1j), 0j, 1j, 0j, beta, const)
+    params = (1e-5 * (1.+1j), 1e-2 * (1.+1j), 0j, 1j, 0j, beta, const)
     inputs = (signal, data, train)
 
     params = device_put(params, device)
@@ -712,10 +711,19 @@ def corr_local(y, x, frame_size=2000, L=None, device=gpus[0]):
     return ret
 
 
-def foe_local(y, frame_size=16384, frame_step=2000, device=cpus[0]):
+def foe_local(y, frame_size=131072, frame_step=1000, device=cpus[0]):
     y = device_put(y, device)
 
+    return _foe_local(y, frame_size, frame_step)
+
+
+@partial(jit, static_argnums=(1,2))
+def _foe_local(y, frame_size, frame_step):
+
     Y = xop.frame(y, frame_size, frame_step, True)
+
+    N = y.shape[0]
+    frames = Y.shape[0]
 
     def foe(carray, y):
         fo_hat, _ = foe_4s(y)
@@ -723,10 +731,13 @@ def foe_local(y, frame_size=16384, frame_step=2000, device=cpus[0]):
 
     _, fo_hat = scan(foe, None, Y)
 
-    kernel = jnp.array([1.] * frame_step) / frame_step
-    convv = vmap(lambda x, h: xop.fftconvolve(x, h, mode='same').real, in_axes=(-1, None), out_axes=-1)
-    fo_hat_smooth = convv(jnp.repeat(fo_hat, frame_step, axis=0), kernel)
+    xp = jnp.arange(frames) * frame_step + frame_size//2
+    x = jnp.arange(N)
 
-    return fo_hat_smooth[:y.shape[0]]
+    interp = vmap(lambda x, xp, fp: jnp.interp(x, xp, fp), in_axes=(None, None, -1), out_axes=-1)
+
+    fo_hat_ip = interp(x, xp, fo_hat)
+
+    return fo_hat_ip
 
 

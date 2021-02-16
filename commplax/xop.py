@@ -237,13 +237,15 @@ def overlap_and_add(array, frame_step):
 def fftconvolve(x, h, mode='full'):
     mode = mode.lower()
 
+    T = h.shape[0]
     y = _fftconvolve(x, h)
 
     if mode == 'full':
         return y
     elif mode == 'same':
-        T = h.shape[0]
         return y[(T-1)//2:(T-1)//2-T+1]
+    elif mode == 'valid':
+        return y[T-1:1-T]
     else:
         raise ValueError('invalid mode')
 
