@@ -96,7 +96,13 @@ def mimo(w, u):
     return v
 
 
-def dd_lms(signal, w_init, data=None, train=None, const=src.const("16QAM", norm=True), device=cpus[0]):
+def mimo_bias(w, b, u):
+    v = jnp.einsum('ijt,tj->i', w, u) + b # no dimension axis
+    return v
+
+
+def dd_lms(signal, w_init, data=None, train=None, lr_w=1/2**10, lr_f=1/2**6, lr_s=0., grad_max=(30., 30.),
+           const=src.const("16QAM", norm=True), device=cpus[0]):
     '''
     Impl. follows Fig. 6 in [1]
     References:
@@ -107,15 +113,15 @@ def dd_lms(signal, w_init, data=None, train=None, const=src.const("16QAM", norm=
 
     if train is None:
         train = np.full((signal.shape[0],), False)
-        data = np.full((signal.shape[0],), 0, dtype=const.dtype)
+        data = np.full((signal.shape[0], signal.shape[-1]), 0, dtype=const.dtype)
     else:
         if train.shape[0] != signal.shape[0] or data.shape[0] != signal.shape[0]:
-            raise ValueError('invalid shape')
+           raise ValueError('invalid shape')
 
     dims = signal.shape[-1]
-    f_init = np.full((dims,), const[0], dtype=const.dtype) # dummy initial value
-    s_init = np.full((dims,), const[0], dtype=const.dtype) # dummy initial value
-    params = (1/2**13, 1/2**8, 1/2**10, f_init, s_init, 1e-12, w_init, const)
+    f_init = np.full((dims,), 1+0j, dtype=const.dtype) # dummy initial value
+    s_init = np.full((dims,), 1+0j, dtype=const.dtype) # dummy initial value
+    params = (w_init, f_init, s_init, lr_w, lr_f, lr_s, grad_max, 1e-8, const)
     inputs = (signal, data, train)
 
     params = device_put(params, device)
@@ -134,7 +140,7 @@ def _dd_lms(params, inputs):
 
 
 def step_dd_lms(params, inputs):
-    mu_p, mu_f, mu_s, f, s, eps, w, const = params
+    w, f, s, mu_p, mu_f, mu_s, grad_max, eps, const = params
     u, x, train = inputs
 
     v = mimo(w, u)
@@ -150,28 +156,35 @@ def step_dd_lms(params, inputs):
     )
 
     psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
-    e_p = d * psi_hat  - v
+    e_p = d * psi_hat - v
     e_f = d - f * v
-    e_s = d - s * f  * v
+    e_s = d - s * f * v
+    gs = -1. / (jnp.abs(f * v)**2 + eps) * e_s * (f * v).conj()
+    gf = -1. / (jnp.abs(v)**2 + eps) * e_f * v.conj()
 
-    outputs = (w, psi_hat, d)
+    gw = -e_p[:, None, None] * u.conj().T[None, ...]
+    gf = jnp.where(jnp.abs(gf) > grad_max[0], gf / jnp.abs(gf) * grad_max[0], gf)
+    gs = jnp.where(jnp.abs(gs) > grad_max[1], gs / jnp.abs(gs) * grad_max[1], gs)
+
+    outputs = (w, f, s, d, (gw, gf, gs))
 
     # update
-    s = s + mu_s / (jnp.abs(f * v)**2 + eps) * e_s * (f * v).conj()
-    f = f + mu_f / (jnp.abs(v)**2 + eps) * e_f * v.conj()
-    grad = e_p[:, None, None] * u.conj().T[None, ...]
-    w = w + mu_p * grad
+    w = w - mu_p * gw
+    f = f - mu_f * gf
+    s = s - mu_s * gs
 
-    params = (mu_p, mu_f, mu_s, f, s, eps, w, const)
+    params = (w, f, s, mu_p, mu_f, mu_s, grad_max, eps, const)
 
     return params, outputs
 
 
-def cma(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
+def cma(y_f, w_init, bias=False, lr=1e-4, R2=1.32, device=cpus[0]):
 
-    R2 = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
+    #const = src.const("16QAM", norm=True)
+    #R2 = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
+    b_init = np.zeros(y_f.shape[-1], dtype=y_f.dtype)
 
-    params = (w_init, R2, lr)
+    params = (w_init, b_init, bias, R2, lr)
     inputs = (y_f,)
 
     params = device_put(params, device)
@@ -179,27 +192,39 @@ def cma(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0
 
     _, ret = scan(step_cma, params, inputs)
 
+    if not bias:
+        ret = ret[:2]
+
     return ret
 
 
 @jit
 def step_cma(params, inputs):
-    w, R2, lr = params
+    w, b, bias, R2, lr = params
     u, = inputs
 
-    l, g = value_and_grad(loss_cma)(w, u, R2)
+    l, (gw, gb) = value_and_grad(loss_cma)((w, b), u, R2)
 
-    outputs = (l, w)
+    outputs = (l, w, b)
 
-    w = w - lr * g.conj()
+    w = w - lr * gw.conj()
 
-    params = (w, R2, lr)
+    b = lax.cond(
+        bias,
+        None,
+        lambda _: b - 1e-4 * gb.conj(),
+        None,
+        lambda _: b
+    )
+
+    params = (w, b, bias, R2, lr)
 
     return params, outputs
 
 
-def loss_cma(w, u, R2):
-    v = mimo(w, u)
+def loss_cma(P, u, R2):
+    w, b = P
+    v = mimo(w, u) + b
     l = jnp.sum(jnp.abs(R2 - jnp.abs(v)**2))
     return l
 
@@ -319,16 +344,23 @@ def step_cma_2sec(params, inputs):
     return params, outputs
 
 
-def rde(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
+def rde(signal, w_init, data=None, train=None, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
     '''
     References:
     [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and carrier phase recovery
         in a 16-QAM optical coherent system. Journal of lightwave technology, 27(15), pp.3042-3049.
     '''
+    if train is None:
+        train = np.full((signal.shape[0],), False)
+        data = np.full((signal.shape[0], signal.shape[-1]), 0, dtype=signal.dtype)
+    else:
+        if train.shape[0] != signal.shape[0] or data.shape[0] != signal.shape[0]:
+            raise ValueError('invalid shape')
+
     Rs = np.unique(np.abs(const))
 
     params = (w_init, lr, Rs)
-    inputs = (y_f,)
+    inputs = (signal, data, train)
 
     params = device_put(params, device)
     inputs = device_put(inputs, device)
@@ -340,9 +372,9 @@ def rde(y_f, w_init, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0
 @jit
 def step_rde(params, inputs):
     w, lr, Rs = params
-    u, = inputs
+    u, x, train = inputs
 
-    l, g = value_and_grad(loss_rde)(w, u, Rs)
+    l, g = value_and_grad(loss_rde)(w, u, Rs, x, train)
 
     outputs = (l, w)
 
@@ -353,9 +385,17 @@ def step_rde(params, inputs):
     return params, outputs
 
 
-def loss_rde(w, u, Rs):
+def loss_rde(w, u, Rs, x, train):
     v = mimo(w, u)[None,:]
-    R2 = Rs[jnp.argmin(jnp.abs(Rs[:,None] * v / jnp.abs(v) - v), axis=0)]**2
+
+    R2 = lax.cond(
+        train,
+        None,
+        lambda _: jnp.abs(x)**2,
+        None,
+        lambda _: Rs[jnp.argmin(jnp.abs(Rs[:,None] * v / jnp.abs(v) - v), axis=0)]**2
+    )
+
     l = jnp.sum(jnp.abs(R2 - jnp.abs(v[0,:])**2))
     return l
 
@@ -407,44 +447,26 @@ def step_mu_cma(carry, u):
     return (w, d, c, z, a, lr), w
 
 
-def lsad_cma(params, inputs):
-    # mu_p, mu_f, mu_s, f, s, eps, w, const = params
-    # u, x, train = inputs
-
-    # v = mimo(w, u)
-
-    # R = beta * R + (1 - beta) * (v[:,None] * v[None,:].conj())
-    # P = beta * P + (1 - beta) * (u[:,None].conj() * v[None,:])
-
-    # outputs = (w, psi_hat, dd_err)
-
-    # # update
-    # w = w - lr * 
-    # w = w + mu_p * grad
-
-    # params = (mu_p, mu_f, mu_s, f, s, eps, w, const)
-
-    return params, outputs
-
-
-def lms_cpane(signal, w_init, data=None, train=None, lr=1e-3, beta=0.9, device=cpus[0]):
+def lms_cpane(signal, w_init, data=None, train=None, lr=1e-4, beta=0.7, const=src.const("16QAM", norm=True), device=cpus[0]):
     const = src.const("16QAM", norm=True)
 
     if train is None:
         train = np.full((signal.shape[0],), False)
         data = np.full((signal.shape[0],), 0, dtype=const.dtype)
 
+    dims = signal.shape[-1]
+
     params_lms = (w_init, lr)
-    params_cpane = (1e-4 * (1.+1j), 1e-1 * (1.+1j), 0j, 1j, 0j, beta, const)
-    params = params_lms + params_cpane
+    params_cpane = tuple(map(lambda x: np.tile(x, dims), [1e-5 * (1.+1j), 1e-2 * (1.+1j), 0j, 1j, 0j, beta])) + (const,)
+    params = (params_lms, params_cpane)
     inputs = (signal, data, train)
 
     params = device_put(params, device)
     inputs = device_put(inputs, device)
 
-    _, w = step_lms_cpane(params, inputs)
+    _, ret = scan(step_lms_cpane, params, inputs)
 
-    return w
+    return ret
 
 
 @jit
@@ -452,27 +474,43 @@ def step_lms_cpane(params, inputs):
 
     u, x, train = inputs
 
-    params_lms, params_cpane = (params[:2], params[2:])
+    params_lms, params_cpane = params
     w, lr = params_lms
 
-    v = mimo(w, u)[None,:]
+    #const = params_cpane[-1]
 
-    params_cpane, outputs_cpane= step_cpane_ekf(params_cpane, (v, x, train))
+    v = mimo(w, u)
 
-    psi_hat = outputs_cpane[0]
+    paxes = (-1,) * 6 + (None,)
+    step_cpane_ekf_v = vmap(lambda par, inp: step_cpane_ekf(par, inp), in_axes=(paxes, (-1, -1, None)), out_axes=(paxes, -1))
 
-    t = v * jnp.exp(-1j * psi_hat)
+    params_cpane, outputs_cpane= step_cpane_ekf_v(params_cpane, (v, x, train))
 
-    l, g = value_and_grad(loss_lms)(t, x)
-    w = w - lr * g.conj()
+    psi_hat, d = outputs_cpane
 
-    params = (w, lr) + params_cpane
+    t = v * jnp.exp(-1j * psi_hat.real)
 
-    return params, (l, w)
+    d = lax.cond(
+        train,
+        None,
+        lambda _: x, # data-aided mode
+        None,
+        lambda _: d, # const[jnp.argmin(jnp.abs(const[:,None] - t[None,:]), axis=0)]
+    )
 
+    r = t - d
 
-def loss_lms(v, x):
-    return jnp.sum(jnp.abs(x - v)**2)
+    l = jnp.abs(r)**2
+
+    outputs = (l, w, psi_hat)
+
+    g_w = r[..., None, None] * u.conj().T[None,...]
+
+    w = w - lr * g_w
+
+    params = ((w, lr), params_cpane)
+
+    return params, outputs
 
 
 def cpane_ekf(signal, data=None, train=None, beta=0.8, device=cpus[0]):
@@ -527,7 +565,7 @@ def step_cpane_ekf(params, inputs):
     K = P_p * H.conj() / (H * P_p * H.conj() + R)
     v = r - d * jnp.exp(1j * Psi_p)
 
-    outputs = (Psi_c,)
+    outputs = (Psi_c, d) # return averaged decision results
 
     Psi_c = Psi_p + K * v
     P_c = (1. - K * H) * P_p
@@ -711,14 +749,17 @@ def corr_local(y, x, frame_size=2000, L=None, device=gpus[0]):
     return ret
 
 
-def foe_local(y, frame_size=131072, frame_step=1000, device=cpus[0]):
+def foe_local(y, frame_size=65536, frame_step=100, sps=1, device=cpus[0]):
+    '''
+    resolution = samplerate / N / 4 / sps (linear interp.)
+    '''
     y = device_put(y, device)
 
-    return _foe_local(y, frame_size, frame_step)
+    return _foe_local(y, frame_size, frame_step, sps)
 
 
-@partial(jit, static_argnums=(1,2))
-def _foe_local(y, frame_size, frame_step):
+@partial(jit, static_argnums=(1, 2, 3))
+def _foe_local(y, frame_size, frame_step, sps):
 
     Y = xop.frame(y, frame_size, frame_step, True)
 
@@ -732,7 +773,8 @@ def _foe_local(y, frame_size, frame_step):
     _, fo_hat = scan(foe, None, Y)
 
     xp = jnp.arange(frames) * frame_step + frame_size//2
-    x = jnp.arange(N)
+    x = jnp.arange(N * sps) / sps
+    fo_hat /= sps
 
     interp = vmap(lambda x, xp, fp: jnp.interp(x, xp, fp), in_axes=(None, None, -1), out_axes=-1)
 
@@ -740,4 +782,35 @@ def _foe_local(y, frame_size, frame_step):
 
     return fo_hat_ip
 
+
+def dc_local(s, dft_size=1024):
+    x0 = s[:dft_size]
+    X0 = jnp.fft.fft(x0)
+    N = s.shape[0]
+    M = jnp.arange(1, N - dft_size - 1)
+
+    def f(X, m):
+        X = jnp.exp(1j * 2 * jnp.pi / dft_size) * (X - s[m-1] + s[m+dft_size])
+        return X, X[0] / dft_size
+
+    _, dc = scan(f, X0, M)
+
+    return dc
+
+
+def getpower(x, real=False):
+    ''' get signal power '''
+    if real:
+        return jnp.mean(x.real**2, axis=0), jnp.mean(x.imag**2, axis=0)
+    else:
+        return jnp.mean(abs(x)**2, axis=0)
+
+
+def normpower(x, real=False):
+    ''' normalize signal power '''
+    if real:
+        pr, pi = getpower(x, real=True)
+        return x.real / jnp.sqrt(pr) + 1j * x.imag / jnp.sqrt(pi)
+    else:
+        return x / jnp.sqrt(getpower(x))
 
