@@ -16,27 +16,10 @@ def dbp_model_general(y, steps, h, c):
     c = device_put(c)
 
     D = jit(vmap(lambda y,h: xop.conv1d_fft_oa(y, h, mode='SAME'), in_axes=1, out_axes=1))
-    # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1))
+    # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # too slow
     N = jit(lambda y,c: y * jnp.exp(1j * (abs(y)**2 @ c)))
 
     for i in range(steps):
-        y = D(y, h[i])
-        y = N(y, c[i])
-
-    return y
-
-
-def tddbp_2d(y, h, c):
-    niter = len(c)
-
-    y = device_put(y)
-    h = device_put(h)
-    c = device_put(c)
-
-    D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1))
-    N = jit(lambda y,c: y * jnp.exp(1j * (abs(y)**2 @ c)))
-
-    for i in range(niter):
         y = D(y, h[i])
         y = N(y, c[i])
 
@@ -101,8 +84,8 @@ def mimo_bias(w, b, u):
     return v
 
 
-def dd_lms(signal, w_init, data=None, train=None, lr_w=1/2**10, lr_f=1/2**6, lr_s=0., grad_max=(30., 30.),
-           const=src.const("16QAM", norm=True), device=cpus[0]):
+def dd_lms(signal, w_init, data=None, train=None, lr_w=1/2**10, lr_f=1/2**6, lr_s=0.,
+           grad_max=(50., 50.), const=src.const("16QAM", norm=True), device=cpus[0]):
     '''
     Impl. follows Fig. 6 in [1]
     References:
@@ -162,11 +145,13 @@ def step_dd_lms(params, inputs):
     gs = -1. / (jnp.abs(f * v)**2 + eps) * e_s * (f * v).conj()
     gf = -1. / (jnp.abs(v)**2 + eps) * e_f * v.conj()
 
+    # clip the grads of f and s which are less regulated than w,
+    # it may stablize this algo. in some corner cases?
     gw = -e_p[:, None, None] * u.conj().T[None, ...]
     gf = jnp.where(jnp.abs(gf) > grad_max[0], gf / jnp.abs(gf) * grad_max[0], gf)
     gs = jnp.where(jnp.abs(gs) > grad_max[1], gs / jnp.abs(gs) * grad_max[1], gs)
 
-    outputs = (w, f, s, d, (gw, gf, gs))
+    outputs = (w, f, s, d)
 
     # update
     w = w - mu_p * gw
@@ -672,6 +657,46 @@ def cpr_ekf(signal, init_states=None, device=cpus[0]):
     return ret
 
 
+def anf(signal, f0, sr, A=1, phi=0, lr=1e-4, device=cpus[0]):
+
+    T = 1 / sr
+    w0 = 2 * np.pi * f0
+
+    K = np.arange(signal.shape[0])
+
+    ref = np.array([A * np.cos(w0 * K * T + phi), A * np.sin(w0 * K * T + phi)]).T
+
+    w_init = jnp.array([0., 0.])
+
+    params = (w_init, lr)
+    inputs = (signal, ref)
+
+    params = device_put(params, device)
+    inputs = device_put(inputs, device)
+
+    _, ret = scan(step_anf, params, inputs)
+
+    return ret
+
+
+@jit
+def step_anf(params, inputs):
+    w, mu = params
+    d, x = inputs
+
+    y = jnp.inner(w, x)
+
+    e = d - y
+
+    outputs = (e, y)
+
+    w += 2 * mu * e * x
+
+    params = (w, mu)
+
+    return params, outputs
+
+
 def measure_cd(x, sr, start=-0.25, end=0.25, bins=1000, wavlen=1550e-9):
     '''
     References:
@@ -783,19 +808,29 @@ def _foe_local(y, frame_size, frame_step, sps):
     return fo_hat_ip
 
 
-def dc_local(s, dft_size=1024):
-    x0 = s[:dft_size]
-    X0 = jnp.fft.fft(x0)
-    N = s.shape[0]
-    M = jnp.arange(1, N - dft_size - 1)
+def power_local(y, frame_size=2000, frame_step=100, sps=1, device=cpus[0]):
+    y = device_put(y, device)
 
-    def f(X, m):
-        X = jnp.exp(1j * 2 * jnp.pi / dft_size) * (X - s[m-1] + s[m+dft_size])
-        return X, X[0] / dft_size
+    return _power_local(y, frame_size, frame_step, sps)
 
-    _, dc = scan(f, X0, M)
 
-    return dc
+@partial(jit, static_argnums=(1, 2, 3))
+def _power_local(y, frame_size, frame_step, sps):
+    yf = xop.frame(y, frame_size, frame_step, True)
+
+    N = y.shape[0]
+    frames = yf.shape[0]
+
+    _, power = scan(lambda c, y: (c, jnp.mean(jnp.abs(y)**2, axis=0)), None, yf)
+
+    xp = jnp.arange(frames) * frame_step + frame_size//2
+    x = jnp.arange(N * sps) / sps
+
+    interp = vmap(lambda x, xp, fp: jnp.interp(x, xp, fp), in_axes=(None, None, -1), out_axes=-1)
+
+    power_ip = interp(x, xp, power)
+
+    return power_ip
 
 
 def getpower(x, real=False):
@@ -813,4 +848,5 @@ def normpower(x, real=False):
         return x.real / jnp.sqrt(pr) + 1j * x.imag / jnp.sqrt(pi)
     else:
         return x / jnp.sqrt(getpower(x))
+
 

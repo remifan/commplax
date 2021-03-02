@@ -271,16 +271,16 @@ def dbp_params(
     span_length,                                      # length of each fiber span [m]
     spans,                                            # number of fiber spans
     freqs,                                            # resulting size of linear operator
-    launch_power,                                     # launch power [dBm]
+    launch_power=30,                                  # launch power [dBm]
     steps_per_span=1,                                 # steps per span
     virtual_spans=None,                               # number of virtual spans
-    carrier_frequency=299792458/1550E-9,           # carrier frequency [Hz]
+    carrier_frequency=299792458/1550E-9,              # carrier frequency [Hz]
     fiber_dispersion=16.5E-6,                         # [s/m^2]
     fiber_dispersion_slope=0.08e3,                    # [s/m^3]
     fiber_loss=.2E-3,                                 # loss of fiber [dB]
     fiber_core_area=80E-12,                           # effective area of fiber [m^2]
     fiber_nonlinear_index=2.6E-20,                    # nonlinear index [m^2/W]
-    fiber_reference_frequency=299792458/1550E-9,   # fiber reference frequency [Hz]
+    fiber_reference_frequency=299792458/1550E-9,      # fiber reference frequency [Hz]
     ignore_beta3=False,
     step_method="uniform"):
 
@@ -300,7 +300,7 @@ def dbp_params(
     B_3     = 0. if ignore_beta3 else \
         (fiber_dispersion_slope * lambda_**2 + 2 * fiber_dispersion * lambda_) * (lambda_ / (2 * pi * C))**2
     gamma   = 2 * pi * fiber_nonlinear_index / lambda_ / fiber_core_area
-    LP      = 10.**(launch_power / 10-3)
+    LP      = 10.**(launch_power / 10 - 3)
     alpha   = fiber_loss / (10. / log(10.))
     L_eff   = lambda h: (1 - exp(-alpha * h)) / alpha
     NIter   = virtual_spans * steps_per_span
