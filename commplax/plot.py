@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import signal
 
+
 def glance(x):
     x = np.asarray(x)
 
@@ -21,6 +22,7 @@ def glance(x):
         pwelch(x[:,ch], ax=asp(gs[0, ch]))
         waveform(x[:,ch], axes=[asp(gs[1, ch]), asp(gs[2, ch])])
 
+
 def scatter(signal, title="Constellation", ax=None, density=False):
     if np.iscomplex(signal).any():
         I = np.real(signal)
@@ -33,7 +35,7 @@ def scatter(signal, title="Constellation", ax=None, density=False):
         fig, ax = plt.subplots()
         fig.set_figwidth(3)
         fig.set_figheight(3)
-        fig.set_dpi(200)
+        fig.set_dpi(100)
     #plt.figure(num=None, figsize=(8, 6), dpi=100)
     if density:
         ax = sns.kdeplot(x=I, y=Q, fill=True, ax=ax)
@@ -42,11 +44,13 @@ def scatter(signal, title="Constellation", ax=None, density=False):
     ax.axis('equal')
     ax.set_title(title)
 
+
 def pwelch(x, ax=None):
     f, w = signal.welch(x, return_onesided=False)
     if ax is None:
         fig, ax = plt.subplots()
     ax.plot(f, abs(w))
+
 
 def waveform(x, axes=None):
     x = np.asarray(x)
@@ -85,4 +89,5 @@ def desc_filter(w, H, ax=None, color=None, legend=None, phase=True):
             ax2.plot(w, np.unwrap(np.angle(H_)), alpha=0.4)
             ax2.set_ylabel('phs.')
     ax1.legend(lgd, loc='best')
+
 

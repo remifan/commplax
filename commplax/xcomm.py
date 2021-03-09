@@ -2,21 +2,23 @@ import numpy as np
 from jax import grad, value_and_grad, lax, jit, vmap, numpy as jnp, devices, device_put
 from jax.ops import index, index_add, index_update
 from functools import partial
-from commplax import xop, src
+from commplax import xop, comm
 
 
 cpus = devices("cpu")
 gpus = devices("gpu")
 
 
-def dbp_model_general(y, steps, h, c):
+def dbp_timedomain(y, h, c):
 
     y = device_put(y)
     h = device_put(h)
     c = device_put(c)
 
+    steps = c.shape[0]
+
     D = jit(vmap(lambda y,h: xop.conv1d_fft_oa(y, h, mode='SAME'), in_axes=1, out_axes=1))
-    # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # too slow
+    # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # often too slow for long h
     N = jit(lambda y,c: y * jnp.exp(1j * (abs(y)**2 @ c)))
 
     for i in range(steps):
@@ -26,10 +28,12 @@ def dbp_model_general(y, steps, h, c):
     return y
 
 
-def dbp_model_direct(y, steps, H, c):
+def dbp_direct(y, H, c):
     y = device_put(y)
     H = device_put(H)
     c = device_put(c)
+
+    steps = c.shape[0]
 
     fft = lambda x: jnp.fft.fft(x, axis=0)
     ifft = lambda x: jnp.fft.ifft(x, axis=0)
@@ -59,11 +63,11 @@ def foe_4s(x, sr=2*jnp.pi):
 
 def scan(f, init, xs, unroll=1):
     '''
-    "NOTE: ``scan`` is known to cause memory leaks when not called within a jitted"
+    "BUG: ``lax.scan`` is known to cause memory leaks when not called within a jitted function"
     "https://github.com/google/jax/issues/3158#issuecomment-631851006"
     "https://github.com/google/jax/pull/5029/commits/977c9c40efa378d1321a7dd8c712af528939ed5f"
     "https://github.com/google/jax/pull/5029"
-    "NOTE": ``scan`` runs much slower on GPU than CPU if loop iterations are small
+    "NOTE": ``scan`` runs much slower on GPU than CPU if loop iterations are small (GPU IO bottleneck?)
     "https://github.com/google/jax/issues/2491"
     "https://github.com/google/jax/pull/3076"
     '''
@@ -79,13 +83,8 @@ def mimo(w, u):
     return v
 
 
-def mimo_bias(w, b, u):
-    v = jnp.einsum('ijt,tj->i', w, u) + b # no dimension axis
-    return v
-
-
-def dd_lms(signal, w_init, data=None, train=None, lr_w=1/2**10, lr_f=1/2**6, lr_s=0.,
-           grad_max=(50., 50.), const=src.const("16QAM", norm=True), device=cpus[0]):
+def dd_lms(signal, w_init, f_init=None, s_init=None, data=None, train=None, lr_w=1/2**10, lr_f=1/2**6, lr_s=0.,
+           grad_max=(50., 50.), const=comm.const("16QAM", norm=True), device=cpus[0]):
     '''
     Impl. follows Fig. 6 in [1]
     References:
@@ -95,15 +94,22 @@ def dd_lms(signal, w_init, data=None, train=None, lr_w=1/2**10, lr_f=1/2**6, lr_
     '''
 
     if train is None:
-        train = np.full((signal.shape[0],), False)
-        data = np.full((signal.shape[0], signal.shape[-1]), 0, dtype=const.dtype)
+        if data is None:
+            data = np.full((signal.shape[0], signal.shape[-1]), 0, dtype=signal.dtype)
+            train = np.full((signal.shape[0],), False)
+        else:
+            train = np.concatenate([np.full((data.shape[0],), True),
+                                    np.full((signal.shape[0] - data.shape[0],), False)])
     else:
         if train.shape[0] != signal.shape[0] or data.shape[0] != signal.shape[0]:
            raise ValueError('invalid shape')
 
     dims = signal.shape[-1]
-    f_init = np.full((dims,), 1+0j, dtype=const.dtype) # dummy initial value
-    s_init = np.full((dims,), 1+0j, dtype=const.dtype) # dummy initial value
+    if f_init is None:
+        f_init = np.full((dims,), 1+0j, dtype=signal.dtype) # dummy initial value
+    if s_init is None:
+        s_init = np.full((dims,), 1+0j, dtype=signal.dtype) # dummy initial value
+
     params = (w_init, f_init, s_init, lr_w, lr_f, lr_s, grad_max, 1e-8, const)
     inputs = (signal, data, train)
 
@@ -165,7 +171,7 @@ def step_dd_lms(params, inputs):
 
 def cma(y_f, w_init, bias=False, lr=1e-4, R2=1.32, device=cpus[0]):
 
-    #const = src.const("16QAM", norm=True)
+    #const = comm.const("16QAM", norm=True)
     #R2 = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
     b_init = np.zeros(y_f.shape[-1], dtype=y_f.dtype)
 
@@ -214,7 +220,7 @@ def loss_cma(P, u, R2):
     return l
 
 
-def rls_cma(y_f, w_init, beta=0.9999, delta=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
+def rls_cma(y_f, w_init, beta=0.9999, delta=1e-4, const=comm.const("16QAM", norm=True), device=cpus[0]):
     '''
     References:
     [1] Faruk, M.S. and Savory, S.J., 2017. Digital signal processing for coherent
@@ -283,7 +289,7 @@ def step_rls_cma(params, inputs):
     return params, outputs
 
 
-def cma_2sec(y_f, h_init, w_init, mu1=1e-4, mu2=1e-1, const=src.const("16QAM", norm=True), device=cpus[0]):
+def cma_2sec(y_f, h_init, w_init, mu1=1e-4, mu2=1e-1, const=comm.const("16QAM", norm=True), device=cpus[0]):
 
     R2 = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
 
@@ -329,7 +335,7 @@ def step_cma_2sec(params, inputs):
     return params, outputs
 
 
-def rde(signal, w_init, data=None, train=None, lr=1e-4, const=src.const("16QAM", norm=True), device=cpus[0]):
+def rde(signal, w_init, data=None, train=None, lr=1e-4, const=comm.const("16QAM", norm=True), device=cpus[0]):
     '''
     References:
     [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and carrier phase recovery
@@ -385,7 +391,7 @@ def loss_rde(w, u, Rs, x, train):
     return l
 
 
-def mu_cma(y_f, w_init, lr=1e-4, alpha=0.9999, const=src.const("16QAM", norm=True), device=cpus[0]):
+def mu_cma(y_f, w_init, lr=1e-4, alpha=0.9999, const=comm.const("16QAM", norm=True), device=cpus[0]):
     d = jnp.mean(abs(const)**4) / jnp.mean(abs(const)**2)
 
     ntap = w_init.shape[-1]
@@ -432,8 +438,8 @@ def step_mu_cma(carry, u):
     return (w, d, c, z, a, lr), w
 
 
-def lms_cpane(signal, w_init, data=None, train=None, lr=1e-4, beta=0.7, const=src.const("16QAM", norm=True), device=cpus[0]):
-    const = src.const("16QAM", norm=True)
+def lms_cpane(signal, w_init, data=None, train=None, lr=1e-4, beta=0.7, const=comm.const("16QAM", norm=True), device=cpus[0]):
+    const = comm.const("16QAM", norm=True)
 
     if train is None:
         train = np.full((signal.shape[0],), False)
@@ -504,7 +510,7 @@ def cpane_ekf(signal, data=None, train=None, beta=0.8, device=cpus[0]):
     [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
     of phase and amplitude noise in coherent QAM systems. Optics express, 24(6), pp.6391-6401.
     '''
-    const = src.const("16QAM", norm=True)
+    const = comm.const("16QAM", norm=True)
 
     if train is None:
         train = np.full((signal.shape[0],), False)
@@ -585,7 +591,7 @@ def cpr_foe_ekf(signal, init_states=None, device=cpus[0]):
     A = jnp.array([[1, 1],
                    [0, 1]])
 
-    const = src.const("16QAM", norm=True)
+    const = comm.const("16QAM", norm=True)
 
     signal = device_put(signal, device)
     init_states = device_put(init_states, device)
@@ -622,7 +628,7 @@ def cpr_foe_ekf(signal, init_states=None, device=cpus[0]):
 def cpr_ekf(signal, init_states=None, device=cpus[0]):
     Q = 3.0e-5 * np.eye(1)
     R = 2.0e-2 * np.eye(2)
-    const = src.const("16QAM", norm=True)
+    const = comm.const("16QAM", norm=True)
 
     P_corr = np.array([[1.]])
     phi_corr = np.array([[0.]])
@@ -658,6 +664,27 @@ def cpr_ekf(signal, init_states=None, device=cpus[0]):
 
 
 def anf(signal, f0, sr, A=1, phi=0, lr=1e-4, device=cpus[0]):
+    if jnp.iscomplexobj(signal):
+        signal = jnp.stack([signal.real, signal.imag], axis=-1)
+        signal = vmap(_anf, in_axes=(-1,) + (None,) * 6, out_axes=(-1,))(
+            signal, f0, sr, A, phi, lr, device
+        )
+        signal = signal[...,0] + jnp.array(1j) * signal[...,1]
+    else:
+        signal = _anf(signal, f0, sr, A, phi, lr, device)
+
+    return signal
+
+
+def _anf(signal, f0, sr, A, phi, lr, device):
+    '''
+    References:
+    [1] Widrow, Bernard, et al. "Adaptive noise cancelling: Principles and applications."
+        Proceedings of the IEEE 63.12 (1975): 1692-1716.
+    [2] Li, Fan, et al. "100 Gbit/s PAM4 signal transmission and reception for 2-km
+        interconnect with adaptive notch filter for narrowband interference." Optics express
+        26.18 (2018): 24066-24074.
+    '''
 
     T = 1 / sr
     w0 = 2 * np.pi * f0
@@ -676,7 +703,7 @@ def anf(signal, f0, sr, A=1, phi=0, lr=1e-4, device=cpus[0]):
 
     _, ret = scan(step_anf, params, inputs)
 
-    return ret
+    return ret[0]
 
 
 @jit
@@ -688,7 +715,7 @@ def step_anf(params, inputs):
 
     e = d - y
 
-    outputs = (e, y)
+    outputs = (e,)
 
     w += 2 * mu * e * x
 
@@ -697,7 +724,7 @@ def step_anf(params, inputs):
     return params, outputs
 
 
-def measure_cd(x, sr, start=-0.25, end=0.25, bins=1000, wavlen=1550e-9):
+def measure_cd(x, sr, start=-0.25, end=0.25, bins=2000, wavlen=1550e-9):
     '''
     References:
         Zhou, H., Li, B., Tang, et. al, 2016. Fractional fourier transformation-based
@@ -732,12 +759,10 @@ def getpower(x):
     return jnp.mean(jnp.abs(x)**2, axis=0)
 
 
-def scale_rotate(y, x, testing_phases=4, device=gpus[0]):
+def cpe(y, x, testing_phases=4, device=gpus[0]):
 
     y = device_put(y, device)
     x = device_put(x, device)
-
-    y = y / jnp.sqrt(getpower(y) / getpower(x))
 
     TP = jnp.exp(1j * 2 * jnp.pi / testing_phases * jnp.arange(testing_phases))
 

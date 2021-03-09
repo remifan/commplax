@@ -237,6 +237,8 @@ def rcosdesign(beta, span, sps, shape='normal', dtype=np.float):
 
 
 def resample(x, p, q, axis=0):
+    p = int(p)
+    q = int(q)
     gcd = np.gcd(p, q)
     return signal.resample_poly(x, p//gcd, q//gcd, axis=axis)
 
@@ -282,6 +284,7 @@ def dbp_params(
     fiber_nonlinear_index=2.6E-20,                    # nonlinear index [m^2/W]
     fiber_reference_frequency=299792458/1550E-9,      # fiber reference frequency [Hz]
     ignore_beta3=False,
+    polmux=True,
     step_method="uniform"):
 
     # short names
@@ -320,6 +323,11 @@ def dbp_params(
             exp(-alpha * span_length * (steps_per_span - np.arange(0, NIter) % steps_per_span-1) / steps_per_span)
     else:
         raise ValueError("step method '%s' not implemented" % step_method)
+
+    if polmux:
+        H = np.tile(H[None, :, None], (NIter, 1, 2))
+        h_casual = np.tile(h_casual[None, :, None], (NIter, 1, 2))
+        phi = np.tile(phi[:, None, None], (1, 2, 2))
 
     return H, h_casual, phi
 
