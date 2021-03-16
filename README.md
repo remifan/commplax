@@ -14,7 +14,7 @@ Commplax is designed for researchers in (optical) communication community and ma
 
 
 ## Quickstart
-The best way to get started with Commplax is through jupyter's notebook demo, here are some examples
+The best way to get started with Commplax is through Jupyter's notebook demo, here are some examples
 - [Hello world](https://github.com/remifan/commplax/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/hello_world.ipynb)
 - (In progress) First glance of optimzation - optimize Digital Back Propogation (namely DNN-DBP or LDBP) while adapting DSP
 - (In progress) Play with DNN - integrate TRAX
@@ -22,18 +22,19 @@ The best way to get started with Commplax is through jupyter's notebook demo, he
 ## Installation
 PyPI package will be available after first release
 
-create a Python virtual enviroment (e.g. conda, pipenv) is strong recommended
+run following steps in Python virtual enviroment (e.g. conda, pipenv) is strongly recommended
 
 ### Try commplax
-- follow [JAX](https://github.com/google/jax) to install JAX
+- follow [JAX](https://github.com/google/jax)'s guide to install JAX
 - `pip install https://github.com/remifan/commplax/archive/master.zip`
 
 ### Install for development
-- follow [JAX](https://github.com/google/jax) to install JAX
-- `git clone https://github.com/remifan/commplax && cd commplax` `pip install -e '.'`
+- follow [JAX](https://github.com/google/jax)'s guide to install JAX
+- `git clone https://github.com/remifan/commplax && cd commplax`
+  `pip install -e '.'`
 
 ## Where to get help
-Commplax's is now under heavily development, any API might be changed constantly. It's encouraged to send me email(remi.qr.fan@gmail.com)
+Commplax's is now under heavily development, any APIs might be changed constantly. A live discussion channel is planned to launch to ease colabration.
 
 ## Open dataset for benchmarks
 prepared in progress, will be ready soon
@@ -45,7 +46,7 @@ Work in progress
 Work in progress
 
 ## Commplax is created by
-Remi Qirui FAN - remi.qr.fan@gmail.com
+[Remi Qirui FAN](https://scholar.google.com/citations?user=W7IC5oEAAAAJ&hl=en&oi=sra) - [email](mailto:remi.qr.fan@gmail.com)
 
 ## Lovely people
 - JAX community
