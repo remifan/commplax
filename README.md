@@ -8,9 +8,9 @@ Commplax is a modern Python DSP library written in [JAX](https://github.com/goog
 - designed carefully to maximize the readlibity and usability of the codebase
 - flawlessly deploy to cloud runtime (e.g. [Colab](https://colab.research.google.com/), [Binder](https://mybinder.org/)) to share and colabrate
 
-Commplax is designed for researchers in (optical) communication community and machine learning community, and hopefully ease the collaboration between 2 world 
-- Tranditional physical layer DSP experts can reply on Commplax to boost their algorithms, optimize the most complicated parts, and further learn how deep learn works from bottom (autograd, optimizers, backprop, ...) to top (all kinds of layers, structures,....).
-- ML researchers can play with Commplax to see the domain specfic parts is DSP (e.g. non-stationary random distortions, fiber non-liearties) and include Commplax's DSP operation as one of their toolbox to improve training capability
+Commplax is designed for researchers in (optical) communication community and machine learning community, and hopefully may help to ease the collaboration between 2 worlds.
+- Tranditional physical layer DSP experts can reply on Commplax to boost their algorithms, optimize the most complicated parts, and further learn how deep learning works from bottom (autograd, optimizers, backprop, ...) to top (all kinds of layers, structures,....).
+- ML researchers can play with Commplax to see the domain specfic parts is communication world (e.g. non-stationary random distortions, fiber non-liearties) and include Commplax's DSP operation as one of their toolbox to improve training capability
 
 
 ## Quickstart
@@ -34,6 +34,9 @@ create a Python virtual enviroment (e.g. conda, pipenv) is strong recommended
 
 ## Where to get help
 Commplax's is now under heavily development, any API might be changed constantly. It's encouraged to send me email(remi.qr.fan@gmail.com)
+
+## Open dataset for benchmarks
+prepared in progress, will be ready soon
 
 ## Citing Commplax
 Work in progress
