@@ -4,6 +4,23 @@ from jax.ops import index, index_add, index_update
 from functools import partial
 
 
+def scan(f, init, xs, length=None, reverse=False, unroll=1, jit_device=None, jit_backend=None):
+    '''
+    "BUG: ``lax.scan`` is known to cause memory leaks when not called within a jitted function"
+    "https://github.com/google/jax/issues/3158#issuecomment-631851006"
+    "https://github.com/google/jax/pull/5029/commits/977c9c40efa378d1321a7dd8c712af528939ed5f"
+    "https://github.com/google/jax/pull/5029"
+    "NOTE": ``scan`` runs much slower on GPU than CPU if loop iterations are small (GPU IO bottleneck?)
+    "https://github.com/google/jax/issues/2491"
+    "https://github.com/google/jax/pull/3076"
+    '''
+    @partial(jit, static_argnums=(0,3,4,5), device=jit_device, backend=jit_backend)
+    def _scan(f, init, xs, length, reverse, unroll):
+        return lax.scan(f, init, xs, length=length, reverse=reverse, unroll=unroll)
+
+    return _scan(f, init, xs, length, reverse, unroll)
+
+
 def conv1d_lax(signal, kernel):
     '''
     CPU impl. is insanely slow for large kernels, jaxlib-cuda (i.e. cudnn's GPU impl.)

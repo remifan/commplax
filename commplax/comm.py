@@ -458,3 +458,29 @@ def corr_local(y, x, frame_size=10000, L=None):
     return qot_local_ip
 
 
+def firfreqz(h, sr=1, N=8192, t0=None):
+    if h.ndim == 1:
+        h = h[None,:]
+
+    T = h.shape[-1]
+
+    if t0 is None:
+        t0 = (T - 1) // 2 + 1
+
+    H = []
+    for hi in h:
+        w, Hi = signal.freqz(hi, worN=N, whole=True)
+        Hi *= np.exp(1j * w * (t0 - 1))
+        H.append(Hi)
+    H = np.array(H)
+
+    w = (w + np.pi) % (2 * np.pi) - np.pi
+
+    H = np.fft.fftshift(H, axes=-1)
+    w = np.fft.fftshift(w, axes=-1) * sr / 2 / np.pi
+
+    # w = np.fft.fftshift(np.fft.fftfreq(H.shape[-1], 1/sr))
+
+    return w, np.squeeze(H)
+
+
