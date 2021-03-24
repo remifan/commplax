@@ -338,10 +338,11 @@ def dbp_params(
 
 def align_periodic(y, x, begin=0, last=1000, b=0.5):
 
+    dims = x.shape[-1]
     z = np.zeros_like(x)
 
     def step(v, u):
-        c = abs(np.correlate(u, v[begin:begin+last], "full"))
+        c = abs(signal.correlate(u, v[begin:begin+last], mode='full', method='fft'))
         c /= np.max(c)
         k = np.arange(-len(x)+1, len(y))
         #n = k[np.argmax(c)]
@@ -354,21 +355,26 @@ def align_periodic(y, x, begin=0, last=1000, b=0.5):
 
     r0 = step(y[:,0], x[:,0])
 
-    if len(r0) == 1: # PDM
-        r0 = r0[0]
-        r1 = step(y[:,1], x[:,1])[0]
-    elif len(r0) == 2: # PDM Emu. ?
-        r1 = r0[1]
-        r0 = r0[0]
-    else:
-        raise RuntimeError('bad input')
+    if dims > 1:
+        if len(r0) == 1: # PDM
+            r0 = r0[0]
+            r1 = step(y[:,1], x[:,1])[0]
+        elif len(r0) == 2: # PDM Emu. ?
+            r1 = r0[1]
+            r0 = r0[0]
+        else:
+            raise RuntimeError('bad input')
 
-    z[:,0] = np.roll(x[:,0], r0)
-    z[:,1] = np.roll(x[:,1], r1)
+        z[:,0] = np.roll(x[:,0], r0)
+        z[:,1] = np.roll(x[:,1], r1)
+        d = np.stack((r0, r1))
+    else:
+        z[:,0] = np.roll(x[:,0], r0)
+        d = r0
 
     z = np.tile(z, (len(y)//len(z)+1,1))[:len(y),:]
 
-    return z, np.stack((r0, r1))
+    return z, d
 
 
 def qamqot(y, x, count_dim=True, count_total=True, L=None):
