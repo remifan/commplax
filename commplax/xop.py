@@ -21,7 +21,8 @@ def scan(f, init, xs, length=None, reverse=False, unroll=1, jit_device=None, jit
     return _scan(f, init, xs, length, reverse, unroll)
 
 
-def conv1d_lax(signal, kernel):
+@partial(jit, static_argnums=(2,))
+def conv1d_lax(signal, kernel, mode='SAME'):
     '''
     CPU impl. is insanely slow for large kernels, jaxlib-cuda (i.e. cudnn's GPU impl.)
     is highly recommended
@@ -37,7 +38,7 @@ def conv1d_lax(signal, kernel):
     x = lax.conv_general_dilated(x,      # lhs = image tensor
                                  h,      # rhs = conv kernel tensor
                                  (1,),   # window strides
-                                 'SAME', # padding mode
+                                 mode, # padding mode
                                  (1,),   # lhs/image dilation
                                  (1,),   # rhs/kernel dilation
                                  dn)     # dimension_numbers = lhs, rhs, out dimension permu
@@ -70,31 +71,6 @@ def _fft_size_factor(x, gpf):
             x += 1
 
     return x
-
-
-def correlate(a, v):
-    '''
-    mode = 'same'
-    NOTE: jnp.correlate() does not support complex inputs
-    '''
-    a = device_put(a)
-    v = device_put(v)
-    return conv1d_lax(a, v[::-1].conj())
-
-
-def correlate_fft(a, v):
-    '''
-    mode = 'same'
-    c_{av}[k] = sum_n a[n+k] * conj(v[n])
-    '''
-    a = device_put(a)
-    v = device_put(v)
-
-    fft = jnp.fft.fft
-    ifft = jnp.fft.ifft
-    fftshift = jnp.fft.fftshift
-
-    return fftshift(ifft(fft(a) * fft(v).conj()))
 
 
 def conv1d_oa_fftsize(signal_length, kernel_length, oa_factor=8, max_fft_prime_factor=5):
@@ -290,6 +266,43 @@ def _fftconvolve(x, h):
     y = y[:out_length]
 
     return y
+
+
+def convolve(a, v, mode='full', method='auto'):
+    method = method.lower()
+    if method == 'auto':
+        method = 0
+    elif method == 'fft':
+        method = 0
+    elif method == 'direct':
+        method = 1
+    else:
+        raise ValueError('invalid method')
+
+    if method == 0:
+        z = fftconvolve(a, v, mode=mode)
+    else:
+        # jnp.convolve() does not support complex number yet
+        # jnp.convolve seems faster in 1d case, need to measure for precision
+        z = jnp.where(
+            jnp.iscomplexobj(a) or jnp.iscomplexobj(v),
+            conv1d_lax(a, v, mode),
+            jnp.convolve(a, v, mode)
+        )
+
+    return z
+
+
+def correlate(a, v, mode='same', method='auto'):
+    '''
+    mode = 'same'
+    c_{av}[k] = sum_n a[n+k] * conj(v[n])
+    '''
+    # NOTE: jnp.correlate() does not support complex inputs
+    a = device_put(a)
+    v = device_put(v)
+    z = convolve(a, v[::-1], mode=mode, method=method)
+    return z
 
 
 def frft(f, a):
