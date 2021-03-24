@@ -325,9 +325,13 @@ def dbp_params(
         raise ValueError("step method '%s' not implemented" % step_method)
 
     if polmux:
-        H = np.tile(H[None, :, None], (NIter, 1, 2))
-        h_casual = np.tile(h_casual[None, :, None], (NIter, 1, 2))
-        phi = np.tile(phi[:, None, None], (1, 2, 2))
+        dims = 2
+    else:
+        dims = 1
+
+    H = np.tile(H[None, :, None], (NIter, 1, dims))
+    h_casual = np.tile(h_casual[None, :, None], (NIter, 1, dims))
+    phi = np.tile(phi[:, None, None], (1, dims, dims))
 
     return H, h_casual, phi
 

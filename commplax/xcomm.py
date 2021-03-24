@@ -2,7 +2,7 @@ import numpy as np
 from jax import grad, value_and_grad, lax, jit, vmap, numpy as jnp, devices, device_put
 from jax.ops import index, index_add, index_update
 from functools import partial
-from commplax import xop, comm
+from commplax import xop, comm, adaptive_filter as af
 
 cpus = devices("cpu")
 gpus = devices("gpu")
@@ -209,5 +209,81 @@ def normpower(x, real=False):
         return x.real / jnp.sqrt(pr) + 1j * x.imag / jnp.sqrt(pi)
     else:
         return x / jnp.sqrt(getpower(x))
+
+
+def mimo_qam(y, sps=2, taps=19, cma_samples=20000, jit_backend='cpu'):
+
+    @partial(jit, static_argnums=(1,2,3), backend=jit_backend)
+    def _mimo_qam(y, sps, taps, cma_samples):
+        '''
+        Adaptive MIMO equalizer for M-QAM signal
+        '''
+
+        if y.shape[0] < cma_samples:
+            raise ValueError('cam_samples must > given samples length')
+
+        dims = y.shape[-1]
+
+        # prepare adaptive filters
+        cma_init, cma_update, cma_map = af.cma()
+        rde_init, rde_update, rde_map = af.rde()
+
+        rtap = (taps + 1) // sps - 1
+        mimo_delay = int(np.ceil((rtap + 1) / sps) - 1)
+
+        # pad to remove filter delay
+        y_pad = jnp.pad(y, [[mimo_delay * sps, taps - sps * (mimo_delay + 1)], [0,0]])
+
+        # framing signal to enable parallelization (a.k.a `jax.vmap`)
+        yf = jnp.array(xop.frame(y_pad, taps, sps))
+
+        # get initial weights
+        w0 = cma_init(taps=taps, dims=dims, dtype=y.dtype)
+        # warm-up MIMO via CMA
+        w, _ = af.iterate(cma_update, w0, yf[:cma_samples])
+        # use RDE that inherits pre-converged weights
+        w0 = rde_init(w, dims=dims, unitarize=True, dtype=y.dtype)
+        w, (rde_loss, ws) = af.iterate(rde_update, w0, yf)
+        # map to get MIMO out
+        x_hat = rde_map(ws, yf)
+
+        return x_hat, w, rde_loss
+
+    return _mimo_qam(y, sps, taps, cma_samples)
+
+
+def foe_qam(x, local_foe=False, lfoe_fs=16384, lfoe_st=5000, jit_backend='cpu'):
+    @partial(jit, static_argnums=(1,2,3), backend=jit_backend)
+    def _foe_qam(x, local_foe=False, lfoe_fs=16384, lfoe_st=5000):
+        dims = x.shape[-1]
+        if local_foe:
+            fo_local = foe_local(x, frame_size=lfoe_fs, frame_step=lfoe_st, sps=1)
+            fo_local = jnp.mean(fo_local, axis=-1)
+            fo_T = np.arange(len(fo_local))
+            fo_poly = np.polyfit(fo_T, fo_local, 3)
+            fo_local_poly = jnp.polyval(fo_poly, fo_T)
+            x *= jnp.tile(jnp.exp(-1j * jnp.cumsum(fo_local_poly))[:, None], (1, dims))
+            fo = fo_poly
+        else:
+            fo, fo_metric = foe_mpowfftmax(x)
+            fo = jnp.mean(fo)
+            T = jnp.arange(x.shape[0])
+            x *= jnp.tile(jnp.exp(-1j * fo * T)[:, None], (1, dims))
+
+        return x, fo
+
+    return _foe_qam(x, local_foe, lfoe_fs, lfoe_st)
+
+
+@jit
+def cpr_qam(x):
+    dims = x.shape[-1]
+    cpr_init, cpr_update, cpr_map = af.array(af.cpane_ekf, dims)()
+
+    cpr_state = cpr_init()
+    cpr_update, (phi, cpr_decision) = af.iterate(cpr_update, cpr_state, x)
+    x = cpr_map(phi, x)
+
+    return x, phi
 
 

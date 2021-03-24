@@ -34,7 +34,7 @@ run following steps in Python virtual enviroment (e.g. conda, pipenv) is strongl
   `pip install -e '.'`
 
 ## Where to get help
-Commplax's is now under heavily development, any APIs might be changed constantly. A live discussion channel is planned to launch to ease colabration.
+Commplax's is now under heavily development, any APIs might be changed constantly. A live discussion channel is planned to launch soon.
 
 ## Open dataset for benchmarks
 prepared in progress, will be ready soon
@@ -46,9 +46,9 @@ Work in progress
 Work in progress
 
 ## Commplax is created by
-[Remi Qirui FAN](https://scholar.google.com/citations?user=W7IC5oEAAAAJ&hl=en&oi=sra) - [email](mailto:remi.qr.fan@gmail.com)
+[Remi Qirui FAN](mailto:remi.qr.fan@gmail.com)
 
 ## Lovely people
 - JAX community
-- [Alan Pak Tao Lau](https://scholar.google.com.hk/citations?user=nZuuG7QAAAAJ&hl=en) (support) 
+- [Alan Pak Tao Lau](https://www.alanptlau.org/) (support) 
 

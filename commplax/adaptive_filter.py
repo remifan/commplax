@@ -92,6 +92,43 @@ def mimo(w, u):
     return jnp.einsum('ijt,tj->i', w, u)
 
 
+def r2c(x):
+    '''
+    convert x from
+    [[ 0.  0.  1. -1.]
+     [ 2. -2.  3. -3.]
+     [ 4. -4.  5. -5.]
+     [ 6. -6.  7. -7.]]
+    to
+    [[0.+0.j 1.-1.j]
+     [2.-2.j 3.-3.j]
+     [4.-4.j 5.-5.j]
+     [6.-6.j 7.-7.j]]
+    '''
+    if jnp.iscomplexobj(x):
+        raise ValueError('input must be real dtype')
+    x = x.reshape((x.shape[0], x.shape[-1] // 2, -1))
+    return x[..., 0] + 1j * x[..., 1]
+
+
+def c2r(x):
+    '''
+    convert x from
+    [[0.+0.j 1.-1.j]
+     [2.-2.j 3.-3.j]
+     [4.-4.j 5.-5.j]
+     [6.-6.j 7.-7.j]]
+    to
+    [[ 0.  0.  1. -1.]
+     [ 2. -2.  3. -3.]
+     [ 4. -4.  5. -5.]
+     [ 6. -6.  7. -7.]]
+    '''
+    if not jnp.iscomplexobj(x):
+        raise ValueError('input must be complex dtype')
+    return jnp.stack([x.real, x.imag], axis=-1).reshape((x.shape[0], -1))
+
+
 def unitarize_mimo_weights(w):
     if len(w.shape) != 3 or w.shape[0] != w.shape[1]:
         raise ValueError('bad shaped weights, must be like (a, a, b)')
@@ -143,9 +180,9 @@ def iterate(update, state, signal, truth=None, train=None, device=cpus[0]):
 
 @adaptive_filter
 def cma(lr=1e-4, R2=1.32):
-    def init(w0=None, taps=19, dims=2, unitarize=True):
+    def init(w0=None, taps=19, dims=2, unitarize=True, dtype=np.complex64):
         if w0 is None:
-            w0 = np.zeros((2, 2, taps), dtype=np.complex64)
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
             w0[np.arange(dims), np.arange(dims), ctap] = 1.
         elif unitarize:
@@ -153,10 +190,15 @@ def cma(lr=1e-4, R2=1.32):
                 w0 = unitarize_mimo_weights(w0)
             except:
                 pass
-        return w0
+        return w0.astype(dtype)
 
     def update(w, u):
-        loss_fn = lambda w, u: jnp.sum(jnp.abs(R2 - jnp.abs(mimo(w, u))**2))
+        def loss_fn(w, u):
+            v = mimo(w, u)
+            v = jnp.where(jnp.iscomplexobj(v), v, r2c(v[None, :])[0, :])
+            loss = jnp.sum(jnp.abs(R2 - jnp.abs(v)**2))
+            return loss
+
         l, g = jax.value_and_grad(loss_fn)(w, u)
         o = (l, w)
         w = w - lr * g.conj()
@@ -176,9 +218,9 @@ def rde(lr=1e-4, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True)))):
         carrier phase recovery in a 16-QAM optical coherent system. Journal
         of lightwave technology, 27(15), pp.3042-3049.
     '''
-    def init(w0=None, taps=19, dims=2, unitarize=False):
+    def init(w0=None, taps=19, dims=2, unitarize=False, dtype=np.complex64):
         if w0 is None:
-            w0 = np.zeros((2, 2, taps), dtype=np.complex64)
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
             w0[np.arange(dims), np.arange(dims), ctap] = 1.
         elif unitarize:
@@ -186,13 +228,14 @@ def rde(lr=1e-4, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True)))):
                 w0 = unitarize_mimo_weights(w0)
             except:
                 pass
-        return w0
+        return w0.astype(dtype)
 
     def update(w, inp):
         u, Rx, train = inp
 
         def loss_fn(w, u):
             v = mimo(w, u)[None,:]
+            v = jnp.where(jnp.iscomplexobj(v), v, r2c(v))
             R2 = jnp.where(train,
                            Rx**2,
                            Rs[jnp.argmin(
