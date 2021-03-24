@@ -105,10 +105,14 @@ def r2c(x):
      [4.-4.j 5.-5.j]
      [6.-6.j 7.-7.j]]
     '''
-    if jnp.iscomplexobj(x):
-        raise ValueError('input must be real dtype')
-    x = x.reshape((x.shape[0], x.shape[-1] // 2, -1))
-    return x[..., 0] + 1j * x[..., 1]
+    def _r2c(x):
+        if x.ndim != 2:
+            raise ValueError('invalid ndim, needs 2 but got %d' % x.ndim)
+        x = x.reshape((x.shape[0], x.shape[-1] // 2, -1))
+        x = x[..., 0] + 1j * x[..., 1]
+        return x
+
+    return x if jnp.iscomplexobj(x) else _r2c(x)
 
 
 def c2r(x):
@@ -124,9 +128,12 @@ def c2r(x):
      [ 4. -4.  5. -5.]
      [ 6. -6.  7. -7.]]
     '''
-    if not jnp.iscomplexobj(x):
-        raise ValueError('input must be complex dtype')
-    return jnp.stack([x.real, x.imag], axis=-1).reshape((x.shape[0], -1))
+    def _c2r(x):
+        if x.ndim != 2:
+            raise ValueError('invalid ndim, needs 2 but got %d' % x.ndim)
+        return jnp.stack([x.real, x.imag], axis=-1).reshape((x.shape[0], -1))
+
+    return _c2r(x) if jnp.iscomplexobj(x) else x
 
 
 def unitarize_mimo_weights(w):
@@ -194,8 +201,7 @@ def cma(lr=1e-4, R2=1.32):
 
     def update(w, u):
         def loss_fn(w, u):
-            v = mimo(w, u)
-            v = jnp.where(jnp.iscomplexobj(v), v, r2c(v[None, :])[0, :])
+            v = r2c(mimo(w, u)[None, :])[0, :]
             loss = jnp.sum(jnp.abs(R2 - jnp.abs(v)**2))
             return loss
 
@@ -234,8 +240,7 @@ def rde(lr=1e-4, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True)))):
         u, Rx, train = inp
 
         def loss_fn(w, u):
-            v = mimo(w, u)[None,:]
-            v = jnp.where(jnp.iscomplexobj(v), v, r2c(v))
+            v = r2c(mimo(w, u)[None,:])
             R2 = jnp.where(train,
                            Rx**2,
                            Rs[jnp.argmin(

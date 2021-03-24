@@ -91,6 +91,20 @@ def measure_cd(x, sr, start=-0.25, end=0.25, bins=2000, wavlen=1550e-9):
     return Dz_hat, L, Dz_set
 
 
+def align_periodic(y, x, begin=0, last=1000, b=0.5):
+    # def step(y, x):
+    #     c = abs(xop.correlate(x, y[begin:begin+last], mode='full', method='fft'))
+    #     c /= np.max(c)
+    #     k = np.arange(-x.shape[0]+1, y.shape[0])
+
+    #     i = np.where(c > b)[0]
+    #     i = i[np.argsort(np.atleast_1d(c[i]))[::-1]]
+    #     j = -k[i] + begin + last
+
+    # step = vmap(step, in_axes=-1, out_axes=-1)
+    pass
+
+
 def getpower(x):
     return jnp.mean(jnp.abs(x)**2, axis=0)
 
