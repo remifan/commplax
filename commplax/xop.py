@@ -38,7 +38,7 @@ def conv1d_lax(signal, kernel, mode='SAME'):
     x = lax.conv_general_dilated(x,      # lhs = image tensor
                                  h,      # rhs = conv kernel tensor
                                  (1,),   # window strides
-                                 mode, # padding mode
+                                 mode.upper(), # padding mode
                                  (1,),   # lhs/image dilation
                                  (1,),   # rhs/kernel dilation
                                  dn)     # dimension_numbers = lhs, rhs, out dimension permu
@@ -230,15 +230,21 @@ def overlap_and_add(array, frame_step):
 def fftconvolve(x, h, mode='full'):
     mode = mode.lower()
 
+    if x.shape[0] < h.shape[0]:
+        tmp = x
+        x = h
+        h = tmp
+
     T = h.shape[0]
+    N = x.shape[0] + T - 1
     y = _fftconvolve(x, h)
 
     if mode == 'full':
         return y
     elif mode == 'same':
-        return y[(T-1)//2:(T-1)//2-T+1]
+        return y[(T - 1) // 2:N - (T - 1) // 2]
     elif mode == 'valid':
-        return y[T-1:1-T]
+        return y[T - 1:N - T + 1]
     else:
         raise ValueError('invalid mode')
 
@@ -284,12 +290,10 @@ def convolve(a, v, mode='full', method='auto'):
     else:
         # jnp.convolve() does not support complex number yet
         # jnp.convolve seems faster in 1d case, need to measure for precision
-        z = jnp.where(
-            jnp.iscomplexobj(a) or jnp.iscomplexobj(v),
-            conv1d_lax(a, v, mode),
-            jnp.convolve(a, v, mode)
-        )
-
+        if jnp.iscomplexobj(a) or jnp.iscomplexobj(v):
+            z = conv1d_lax(a, v, mode)
+        else:
+            z = jnp.convolve(a, v, mode)
     return z
 
 
@@ -301,7 +305,7 @@ def correlate(a, v, mode='same', method='auto'):
     # NOTE: jnp.correlate() does not support complex inputs
     a = device_put(a)
     v = device_put(v)
-    z = convolve(a, v[::-1], mode=mode, method=method)
+    z = convolve(a, v[::-1].conj(), mode=mode, method=method)
     return z
 
 
