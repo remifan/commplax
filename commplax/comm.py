@@ -153,21 +153,30 @@ def grayqamplot(L):
         plt.annotate(fstr.format(x[i]), (I[i], Q[i]))
 
 
+def _parse_qamorder(type_str):
+    if type_str.lower() == 'qpsk':
+        type_str = '4QAM'
+    M = int(re.findall(r'\d+', type_str)[0])
+    T = re.findall(r'[a-zA-Z]+', type_str)[0].lower()
+    if T != 'qam':
+        raise ValueError('{} is not implemented yet'.format(T))
+    return M
+
+
 def const(type_str, norm=False):
     ''' generate constellation given its natrual names '''
 
-    M = int(re.findall(r'\d+', type_str)[0])
-    T = re.findall(r'[a-zA-Z]+', type_str)[0].lower()
-
-    if T == "qam":
-        C = qammod(range(M), M)
-    else:
-        raise ValueError('{} is not implemented yet'.format(T))
-
+    M = _parse_qamorder(type_str)
+    C = qammod(range(M), M)
     if norm:
         C /= np.sqrt(2*(M-1)/3)
-
     return C
+
+
+def canonical_qam_scale(M):
+    if isinstance(M, str):
+        M = _parse_qamorder(M)
+    return np.sqrt((M-1) * 2 / 3)
 
 
 def anuqrng_bit(L):
@@ -336,7 +345,37 @@ def dbp_params(
     return H, h_casual, phi
 
 
-def align_periodic(y, x, begin=0, last=1000, b=0.5):
+def finddelay(x, y):
+    '''
+    case 1:
+        X = [1, 2, 3]
+        Y = [0, 0, 1, 2, 3]
+        D = comm.finddelay(X, Y) # D = 2
+    case 2:
+        X = [0, 0, 1, 2, 3, 0]
+        Y = [0.02, 0.12, 1.08, 2.21, 2.95, -0.09]
+        D = comm.finddelay(X, Y) # D = 0
+    case 3:
+        X = [0, 0, 0, 1, 2, 3, 0, 0]
+        Y = [1, 2, 3, 0]
+        D = comm.finddelay(X, Y) # D = -3
+    case 4:
+        X = [0, 1, 2, 3]
+        Y = [1, 2, 3, 0, 0, 0, 0, 1, 2, 3, 0, 0]
+        D = comm.finddelay(X, Y) # D = -1
+    reference:
+        https://www.mathworks.com/help/signal/ref/finddelay.html
+    '''
+    x = np.asarray(x)
+    y = np.asarray(y)
+    c = abs(signal.correlate(x, y, mode='full', method='fft'))
+    k = np.arange(-len(y)+1, len(x))
+    i = np.lexsort((np.abs(k), -c))[0] # lexsort to handle case 4
+    d = -k[i]
+    return d
+
+
+def align_periodic(y, x, begin=0, last=2000, b=0.5):
 
     dims = x.shape[-1]
     z = np.zeros_like(x)
