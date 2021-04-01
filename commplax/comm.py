@@ -153,7 +153,7 @@ def grayqamplot(L):
         plt.annotate(fstr.format(x[i]), (I[i], Q[i]))
 
 
-def _parse_qamorder(type_str):
+def parseqamorder(type_str):
     if type_str.lower() == 'qpsk':
         type_str = '4QAM'
     M = int(re.findall(r'\d+', type_str)[0])
@@ -166,7 +166,7 @@ def _parse_qamorder(type_str):
 def const(type_str, norm=False):
     ''' generate constellation given its natrual names '''
 
-    M = _parse_qamorder(type_str)
+    M = parseqamorder(type_str)
     C = qammod(range(M), M)
     if norm:
         C /= np.sqrt(2*(M-1)/3)
@@ -175,7 +175,7 @@ def const(type_str, norm=False):
 
 def canonical_qam_scale(M):
     if isinstance(M, str):
-        M = _parse_qamorder(M)
+        M = parseqamorder(M)
     return np.sqrt((M-1) * 2 / 3)
 
 

@@ -1,11 +1,90 @@
 import numpy as np
+import jax
 from jax import grad, value_and_grad, lax, jit, vmap, numpy as jnp, devices, device_put
 from jax.ops import index, index_add, index_update
 from functools import partial
 from commplax import xop, comm, adaptive_filter as af
 
-cpus = devices("cpu")
-gpus = devices("gpu")
+
+def getpower(x, real=False):
+    ''' get signal power '''
+    return jnp.mean(x.real**2, axis=0) + jnp.array(1j) * jnp.mean(x.imag**2, axis=0) \
+        if real else jnp.mean(abs(x)**2, axis=0)
+
+
+def normpower(x, real=False):
+    ''' normalize signal power '''
+    if real:
+        p = getpower(x, real=True)
+        return x.real / jnp.sqrt(p.real) + jnp.array(1j) * x.imag / jnp.sqrt(p.imag)
+    else:
+        return x / jnp.sqrt(getpower(x))
+
+
+def qamscale(modformat):
+    M = comm.parseqamorder(modformat)
+    return jnp.sqrt((M-1) * 2 / 3)
+
+
+def dbp_params(
+    sample_rate,                                      # sample rate of target signal [Hz]
+    span_length,                                      # length of each fiber span [m]
+    spans,                                            # number of fiber spans
+    freqs,                                            # resulting size of linear operator
+    launch_power=30,                                  # launch power [dBm]
+    steps_per_span=1,                                 # steps per span
+    virtual_spans=None,                               # number of virtual spans
+    carrier_frequency=299792458/1550E-9,              # carrier frequency [Hz]
+    fiber_dispersion=16.5E-6,                         # [s/m^2]
+    fiber_dispersion_slope=0.08e3,                    # [s/m^3]
+    fiber_loss=.2E-3,                                 # loss of fiber [dB]
+    fiber_core_area=80E-12,                           # effective area of fiber [m^2]
+    fiber_nonlinear_index=2.6E-20,                    # nonlinear index [m^2/W]
+    fiber_reference_frequency=299792458/1550E-9,      # fiber reference frequency [Hz]
+    ignore_beta3=False,
+    polmux=True):
+
+    # short names
+    pi  = jnp.pi
+    log = jnp.log
+    exp = jnp.exp
+    ifft = jnp.fft.ifft
+
+    # virtual span is used in cases where we do not use physical span settings
+    if virtual_spans is None:
+        virtual_spans = spans
+
+    C       = 299792458. # speed of light [m/s]
+    lambda_ = C / fiber_reference_frequency
+    B_2     = -fiber_dispersion * lambda_**2 / (2 * pi * C)
+    B_3     = 0. if ignore_beta3 else \
+        (fiber_dispersion_slope * lambda_**2 + 2 * fiber_dispersion * lambda_) * (lambda_ / (2 * pi * C))**2
+    gamma   = 2 * pi * fiber_nonlinear_index / lambda_ / fiber_core_area
+    LP      = 10.**(launch_power / 10 - 3)
+    alpha   = fiber_loss / (10. / log(10.))
+    L_eff   = lambda h: (1 - exp(-alpha * h)) / alpha
+    NIter   = virtual_spans * steps_per_span
+    delay   = (freqs - 1) // 2
+    dw      = 2 * pi * (carrier_frequency - fiber_reference_frequency)
+    w_res   = 2 * pi * sample_rate / freqs
+    k       = jnp.arange(freqs)
+    w       = jnp.where(k > delay, k - freqs, k) * w_res # ifftshifted
+
+    H   = exp(-1j * (-B_2 / 2 * (w + dw)**2 + B_3 / 6 * (w + dw)**3) * \
+                  span_length * spans / virtual_spans / steps_per_span)
+    H_casual = H * exp(-1j * w * delay / sample_rate)
+    h_casual = ifft(H_casual)
+
+    phi = spans / virtual_spans * gamma * L_eff(span_length / steps_per_span) * LP * \
+        exp(-alpha * span_length * (steps_per_span - jnp.arange(0, NIter) % steps_per_span-1) / steps_per_span)
+
+    dims = 2 if polmux else 1
+
+    H = jnp.tile(H[None, :, None], (NIter, 1, dims))
+    h_casual = jnp.tile(h_casual[None, :, None], (NIter, 1, dims))
+    phi = jnp.tile(phi[:, None, None], (1, dims, dims))
+
+    return H, h_casual, phi
 
 
 def dbp_timedomain(y, h, c):
@@ -91,213 +170,51 @@ def measure_cd(x, sr, start=-0.25, end=0.25, bins=2000, wavlen=1550e-9):
     return Dz_hat, L, Dz_set
 
 
-def align_periodic(y, x, begin=0, last=1000, b=0.5):
-    # def step(y, x):
-    #     c = abs(xop.correlate(x, y[begin:begin+last], mode='full', method='fft'))
-    #     c /= np.max(c)
-    #     k = np.arange(-x.shape[0]+1, y.shape[0])
-
-    #     i = np.where(c > b)[0]
-    #     i = i[np.argsort(np.atleast_1d(c[i]))[::-1]]
-    #     j = -k[i] + begin + last
-
-    # step = vmap(step, in_axes=-1, out_axes=-1)
-    pass
+def dimsdelay(x):
+    dims = x.shape[-1]
+    if dims <= 1:
+        raise ValueError('input dimension must be at least 2 but given %d' % dims)
+    x = device_put(x)
+    return jax.vmap(xop.finddelay, in_axes=(None, -1), out_axes=0)(x[:, 0], x[:, 1:])
 
 
-def getpower(x):
-    return jnp.mean(jnp.abs(x)**2, axis=0)
+def repalign(y, x, skipfirst=0):
+    N = y.shape[0]
+    M = x.shape[0]
+    offsets = -jax.vmap(xop.finddelay, in_axes=-1)(y[skipfirst:], x) + skipfirst
+    rep = -(-N // M)
+    xrep = jnp.tile(x, [rep, 1])
+    z = jax.vmap(jnp.roll, in_axes=-1, out_axes=-1)(xrep, offsets)[:N, :]
+    return z
 
 
-def cpe(y, x, testing_phases=4, device=gpus[0]):
+def alignphase(y, x, testing_phases=4):
 
-    y = device_put(y, device)
-    x = device_put(x, device)
+    y = device_put(y)
+    x = device_put(x)
 
-    TP = jnp.exp(1j * 2 * jnp.pi / testing_phases * jnp.arange(testing_phases))
+    TPS = jnp.exp(1j * 2 * jnp.pi / testing_phases * jnp.arange(testing_phases))
 
-    def f(y, x):
-        y_t = jnp.outer(y, TP)
+    def searchphase(y, x):
+        y_t = jnp.outer(y, TPS)
         x_t = jnp.tile(x[:,None], (1, testing_phases))
         snr_t = 10. * jnp.log10(getpower(y_t) / getpower(y_t - x_t))
-        return TP[jnp.argmax(snr_t)]
+        return TPS[jnp.argmax(snr_t)]
 
-    return y * jit(vmap(f, in_axes=-1))(y, x)
-
-
-def corr_local(y, x, frame_size=2000, L=None, device=gpus[0]):
-    y = device_put(y, device)
-    x = device_put(x, device)
-
-    if L is None:
-        L = len(np.unique(x))
-
-    Y = xop.frame(y, frame_size, frame_size, True)
-    X = xop.frame(x, frame_size, frame_size, True)
-
-    lag = jnp.arange(-(frame_size-1)//2, (frame_size+1)//2)
-
-    corr_v = vmap(lambda a, b: xop.correlate_fft(a, b), in_axes=-1, out_axes=-1)
-
-    def f(_, z):
-        y, x = z
-        c = jnp.abs(corr_v(y, x))
-        return _, lag[jnp.argmax(c, axis=0)]
-
-    _, ret = xop.scan(f, None, (Y, X))
-
-    return ret
+    return y * vmap(searchphase, in_axes=-1)(y, x)
 
 
-def foe_local(y, frame_size=65536, frame_step=100, sps=1, device=cpus[0]):
+def localfoe(signal, frame_size=65536, frame_step=100, sps=1, method=lambda x: foe_mpowfftmax(x)[0]):
     '''
     resolution = samplerate / N / 4 / sps (linear interp.)
     '''
-    y = device_put(y, device)
-
-    return _foe_local(y, frame_size, frame_step, sps)
-
-
-@partial(jit, static_argnums=(1, 2, 3))
-def _foe_local(y, frame_size, frame_step, sps):
-
-    Y = xop.frame(y, frame_size, frame_step, True)
-
-    N = y.shape[0]
-    frames = Y.shape[0]
-
-    def foe(carray, y):
-        fo_hat, _ = foe_mpowfftmax(y)
-        return carray, fo_hat
-
-    _, fo_hat = xop.scan(foe, None, Y)
-
-    xp = jnp.arange(frames) * frame_step + frame_size//2
-    x = jnp.arange(N * sps) / sps
-    fo_hat /= sps
-
-    interp = vmap(lambda x, xp, fp: jnp.interp(x, xp, fp), in_axes=(None, None, -1), out_axes=-1)
-
-    fo_hat_ip = interp(x, xp, fo_hat)
-
-    return fo_hat_ip
+    y = device_put(signal)
+    return xop.framescaninterp(y, method, frame_size, frame_step, sps)
 
 
-def power_local(y, frame_size=2000, frame_step=100, sps=1, device=cpus[0]):
-    y = device_put(y, device)
-
-    return _power_local(y, frame_size, frame_step, sps)
-
-
-@partial(jit, static_argnums=(1, 2, 3))
-def _power_local(y, frame_size, frame_step, sps):
-    yf = xop.frame(y, frame_size, frame_step, True)
-
-    N = y.shape[0]
-    frames = yf.shape[0]
-
-    _, power = xop.scan(lambda c, y: (c, jnp.mean(jnp.abs(y)**2, axis=0)), None, yf)
-
-    xp = jnp.arange(frames) * frame_step + frame_size//2
-    x = jnp.arange(N * sps) / sps
-
-    interp = vmap(lambda x, xp, fp: jnp.interp(x, xp, fp), in_axes=(None, None, -1), out_axes=-1)
-
-    power_ip = interp(x, xp, power)
-
-    return power_ip
-
-
-def getpower(x, real=False):
-    ''' get signal power '''
-    if real:
-        return jnp.mean(x.real**2, axis=0), jnp.mean(x.imag**2, axis=0)
-    else:
-        return jnp.mean(abs(x)**2, axis=0)
-
-
-def normpower(x, real=False):
-    ''' normalize signal power '''
-    if real:
-        pr, pi = getpower(x, real=True)
-        return x.real / jnp.sqrt(pr) + 1j * x.imag / jnp.sqrt(pi)
-    else:
-        return x / jnp.sqrt(getpower(x))
-
-
-def mimo_qam(y, sps=2, taps=19, cma_samples=20000, jit_backend='cpu'):
-
-    @partial(jit, static_argnums=(1,2,3), backend=jit_backend)
-    def _mimo_qam(y, sps, taps, cma_samples):
-        '''
-        Adaptive MIMO equalizer for M-QAM signal
-        '''
-
-        if y.shape[0] < cma_samples:
-            raise ValueError('cam_samples must > given samples length')
-
-        dims = y.shape[-1]
-
-        # prepare adaptive filters
-        cma_init, cma_update, cma_map = af.cma()
-        rde_init, rde_update, rde_map = af.rde()
-
-        rtap = (taps + 1) // sps - 1
-        mimo_delay = int(np.ceil((rtap + 1) / sps) - 1)
-
-        # pad to remove filter delay
-        y_pad = jnp.pad(y, [[mimo_delay * sps, taps - sps * (mimo_delay + 1)], [0,0]])
-
-        # framing signal to enable parallelization (a.k.a `jax.vmap`)
-        yf = jnp.array(xop.frame(y_pad, taps, sps))
-
-        # get initial weights
-        w0 = cma_init(taps=taps, dims=dims, dtype=y.dtype)
-        # warm-up MIMO via CMA
-        w, _ = af.iterate(cma_update, w0, yf[:cma_samples])
-        # use RDE that inherits pre-converged weights
-        w0 = rde_init(w, dims=dims, unitarize=True, dtype=y.dtype)
-        w, (rde_loss, ws) = af.iterate(rde_update, w0, yf)
-        # map to get MIMO out
-        x_hat = rde_map(ws, yf)
-
-        return x_hat, w, rde_loss
-
-    return _mimo_qam(y, sps, taps, cma_samples)
-
-
-def foe_qam(x, local_foe=False, lfoe_fs=16384, lfoe_st=5000, jit_backend='cpu'):
-    @partial(jit, static_argnums=(1,2,3), backend=jit_backend)
-    def _foe_qam(x, local_foe=False, lfoe_fs=16384, lfoe_st=5000):
-        dims = x.shape[-1]
-        if local_foe:
-            fo_local = foe_local(x, frame_size=lfoe_fs, frame_step=lfoe_st, sps=1)
-            fo_local = jnp.mean(fo_local, axis=-1)
-            fo_T = np.arange(len(fo_local))
-            fo_poly = np.polyfit(fo_T, fo_local, 3)
-            fo_local_poly = jnp.polyval(fo_poly, fo_T)
-            x *= jnp.tile(jnp.exp(-1j * jnp.cumsum(fo_local_poly))[:, None], (1, dims))
-            fo = fo_poly
-        else:
-            fo, fo_metric = foe_mpowfftmax(x)
-            fo = jnp.mean(fo)
-            T = jnp.arange(x.shape[0])
-            x *= jnp.tile(jnp.exp(-1j * fo * T)[:, None], (1, dims))
-
-        return x, fo
-
-    return _foe_qam(x, local_foe, lfoe_fs, lfoe_st)
-
-
-@jit
-def cpr_qam(x):
-    dims = x.shape[-1]
-    cpr_init, cpr_update, cpr_map = af.array(af.cpane_ekf, dims)()
-
-    cpr_state = cpr_init()
-    cpr_update, (phi, cpr_decision) = af.iterate(cpr_update, cpr_state, x)
-    x = cpr_map(phi, x)
-
-    return x, phi
+def localpower(signal, frame_size=2000, frame_step=100):
+    y = device_put(signal)
+    poweval = lambda c, y: (c, jnp.mean(jnp.abs(y)**2, axis=0))
+    return xop.framescaninterp(y, poweval, frame_size, frame_step)
 
 

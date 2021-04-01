@@ -92,7 +92,7 @@ def mimo(w, u):
     return jnp.einsum('ijt,tj->i', w, u)
 
 
-def r2c(x):
+def r2c(r):
     '''
     convert x from
     [[ 0.  0.  1. -1.]
@@ -105,17 +105,17 @@ def r2c(x):
      [4.-4.j 5.-5.j]
      [6.-6.j 7.-7.j]]
     '''
-    def _r2c(x):
-        if x.ndim != 2:
+    if not jnp.iscomplexobj(r):
+        if r.ndim != 2:
             raise ValueError('invalid ndim, needs 2 but got %d' % x.ndim)
-        x = x.reshape((x.shape[0], x.shape[-1] // 2, -1))
-        x = x[..., 0] + 1j * x[..., 1]
-        return x
+        r = r.reshape((r.shape[0], r.shape[-1] // 2, -1))
+        c = r[..., 0] + 1j * r[..., 1]
+    else:
+        c = r
+    return c
 
-    return x if jnp.iscomplexobj(x) else _r2c(x)
 
-
-def c2r(x):
+def c2r(c):
     '''
     convert x from
     [[0.+0.j 1.-1.j]
@@ -128,12 +128,13 @@ def c2r(x):
      [ 4. -4.  5. -5.]
      [ 6. -6.  7. -7.]]
     '''
-    def _c2r(x):
-        if x.ndim != 2:
-            raise ValueError('invalid ndim, needs 2 but got %d' % x.ndim)
-        return jnp.stack([x.real, x.imag], axis=-1).reshape((x.shape[0], -1))
-
-    return _c2r(x) if jnp.iscomplexobj(x) else x
+    if jnp.iscomplexobj(c):
+        if c.ndim != 2:
+            raise ValueError('invalid ndim, needs 2 but got %d' % c.ndim)
+        r = jnp.stack([c.real, c.imag], axis=-1).reshape((c.shape[0], -1))
+    else:
+        r = c
+    return r
 
 
 def unitarize_mimo_weights(w):
@@ -147,8 +148,8 @@ def unitarize_mimo_weights(w):
     return w
 
 
-def make_train_argin(ys, truth=None, train=None):
-    leny = ys.shape[0]
+def make_train_argin(ys, truth=None, train=None, sps=1):
+    leny = ys.shape[0] // sps
     if truth is not None:
         lent = truth.shape[0]
         if lent > leny:
@@ -173,7 +174,7 @@ def make_train_argin(ys, truth=None, train=None):
             train = jnp.concatenate([T, F])
         else:
             pass
-        truth = jnp.concatenate([truth, jnp.zeros_like(ys, shape=(leny - lent,) + ys.shape[1:])])
+        truth = jnp.concatenate([truth, jnp.zeros_like(ys, shape=(leny - lent, ys.shape[-1]))])
         xs = (ys, truth, train)
     else:
         xs = ys
@@ -186,7 +187,10 @@ def iterate(update, state, signal, truth=None, train=None, device=cpus[0]):
 
 
 @adaptive_filter
-def cma(lr=1e-4, R2=1.32):
+def cma(lr=1e-4, R2=1.32, const=None):
+    if const is not None:
+        R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
+
     def init(w0=None, taps=19, dims=2, unitarize=True, dtype=np.complex64):
         if w0 is None:
             w0 = np.zeros((dims, dims, taps), dtype=dtype)
@@ -216,24 +220,81 @@ def cma(lr=1e-4, R2=1.32):
     return AdaptiveFilter(init, update, static_map)
 
 
+@adaptive_filter
+def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
+    '''
+    References:
+    [1] Papadias, Constantinos B., and Arogyaswami J. Paulraj. "A constant modulus algorithm
+    for multiuser signal separation in presence of delay spread using antenna arrays."
+    IEEE signal processing letters 4.6 (1997): 178-181.
+    [2] Vgenis, Athanasios, et al. "Nonsingular constant modulus equalizer for PDM-QPSK coherent
+    optical receivers." IEEE Photonics Technology Letters 22.1 (2009): 45-47.
+    '''
+    if const is not None:
+        R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
+
+    def init(w0=None, taps=19, dtype=np.complex64):
+        if w0 is None:
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+
+        z = jnp.zeros((delta, dims), dtype=dtype)
+        r = jnp.zeros((dims, dims, delta), dtype=dtype)
+        return w0.astype(dtype), z, r
+
+    def update(state, u):
+        w, z, r = state
+
+        z = jnp.concatenate((r2c(mimo(w, u)[None, :]), z[:-1,:]))
+        z0 = jnp.repeat(z, dims, axis=-1)
+        z1 = jnp.tile(z, (1, dims))
+        rt = jax.vmap(lambda a, b: a[0] * b.conj(), in_axes=-1, out_axes=0)(z0, z1).reshape(r.shape)
+        r = beta * r + (1 - beta) * rt
+        r_sqsum = jnp.sum(jnp.abs(r)**2, axis=-1)
+
+        v = mimo(w, u)
+        lcma = jnp.sum(jnp.abs(jnp.abs(v)**2 - R2)**2)
+        lmu = 2 * (jnp.sum(r_sqsum) - jnp.sum(jnp.diag(r_sqsum)))
+        gcma = 4 * (v * (jnp.abs(v)**2 - R2))[..., None, None] * jnp.conj(u).T[None, ...]
+        gmu_tmp_full = (4 * r[..., None, None]
+                        * z.T[None, ..., None, None]
+                        * jnp.conj(u).T[None, None, None, ...]) # shape: [dims, dims, delta, dims, T]
+        # reduce delta axis
+        gmu_tmp_dr = jnp.sum(gmu_tmp_full, axis=2) # shape: [dims, dims, dims, T]
+        # sum correlation from the rest channels
+        gmu = jnp.sum(gmu_tmp_dr, axis=1) - gmu_tmp_dr[jnp.arange(dims), jnp.arange(dims), ...]
+        l = lcma + lmu
+        g = gcma + gmu
+
+        o = (l, w)
+        w = w - lr * g
+        state = (w, z, r)
+        return state, o
+
+    def static_map(ws, yf):
+        return jax.vmap(mimo)(ws, yf)
+
+    return AdaptiveFilter(init, update, static_map)
+
+
 @partial(adaptive_filter, trainable=True)
-def rde(lr=1e-4, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True)))):
+def rde(dims=2, lr=1e-4, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
     '''
     References:
     [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
         carrier phase recovery in a 16-QAM optical coherent system. Journal
         of lightwave technology, 27(15), pp.3042-3049.
     '''
-    def init(w0=None, taps=19, dims=2, unitarize=False, dtype=np.complex64):
+
+    if const is not None:
+        Rs = jnp.array(jnp.unique(jnp.abs(const)))
+
+    def init(w0=None, taps=19, dtype=np.complex64):
         if w0 is None:
             w0 = np.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
             w0[np.arange(dims), np.arange(dims), ctap] = 1.
-        elif unitarize:
-            try:
-                w0 = unitarize_mimo_weights(w0)
-            except:
-                pass
         return w0.astype(dtype)
 
     def update(w, inp):
@@ -316,8 +377,8 @@ def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., grad_max=(50., 50.), eps=1e-8,
 
 
 @partial(adaptive_filter, trainable=True)
-def cpane_ekf(beta=0.8,
-              Q=1e-5 * (1.+1j),
+def cpane_ekf(beta=0.7,
+              Q=5e-5 * (1.+1j),
               R=1e-2 * (1.+1j),
               const=comm.const("16QAM", norm=True)):
     '''
@@ -325,7 +386,7 @@ def cpane_ekf(beta=0.8,
     [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
     of phase and amplitude noise in coherent QAM systems. Optics express, 24(6), pp.6391-6401.
     '''
-    const = jnp.array(const)
+    const = jnp.asarray(const)
 
     def init(p0=0j):
         state0 = (p0, 1j, 0j)

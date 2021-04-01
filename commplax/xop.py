@@ -182,6 +182,19 @@ def frame(x, flen, fstep, pad_end=False, pad_constants=0.):
     return _frame(x, flen, fstep, pad_end, pad_constants)
 
 
+def framescaninterp(x, func, flen, fstep, P=1):
+    fn = lambda carry, y: (carry, func(y))
+    N = x.shape[0]
+    xf = frame(x, flen, fstep, pad_end=True)
+    F = xf.shape[0]
+    _, ys = scan(fn, None, xf)
+    xp = P * (jnp.arange(F) * fstep + flen//2)
+    x = jnp.arange(N * P) / P
+    interp = vmap(lambda x, xp, fp: jnp.interp(x, xp, fp), in_axes=(None, None, -1), out_axes=-1)
+    ysip = interp(x, xp, ys)
+    return ysip
+
+
 @partial(jit, static_argnums=(1,))
 def overlap_and_add(array, frame_step):
     array_shape = array.shape
@@ -225,6 +238,37 @@ def overlap_and_add(array, frame_step):
     array = array[:output_length]
 
     return array
+
+
+@jit
+def finddelay(x, y):
+    '''
+    case 1:
+        X = jnp.array([1, 2, 3])
+        Y = jnp.array([0, 0, 1, 2, 3])
+        D = xcomm.finddelay(X, Y) # D = 2
+    case 2:
+        X = jnp.array([0, 0, 1, 2, 3, 0])
+        Y = jnp.array([0.02, 0.12, 1.08, 2.21, 2.95, -0.09])
+        D = xcomm.finddelay(X, Y) # D = 0
+    case 3:
+        X = jnp.array([0, 0, 0, 1, 2, 3, 0, 0])
+        Y = jnp.array([1, 2, 3, 0])
+        D = xcomm.finddelay(X, Y) # D = -3
+    case 4:
+        X = jnp.array([0, 1, 2, 3])
+        Y = jnp.array([1, 2, 3, 0, 0, 0, 0, 1, 2, 3, 0, 0])
+        D = xcomm.finddelay(X, Y) # D = -1
+    reference:
+        https://www.mathworks.com/help/signal/ref/finddelay.html
+    '''
+    x = device_put(x)
+    y = device_put(y)
+    c = jnp.abs(correlate(x, y, mode='full', method='fft'))
+    k = jnp.arange(-y.shape[0]+1, x.shape[0])
+    i = jnp.lexsort((jnp.abs(k), -c))[0] # lexsort to handle case 4
+    d = -k[i]
+    return d
 
 
 def fftconvolve(x, h, mode='full'):
@@ -307,6 +351,25 @@ def correlate(a, v, mode='same', method='auto'):
     v = device_put(v)
     z = convolve(a, v[::-1].conj(), mode=mode, method=method)
     return z
+
+
+def polyfit(x, y, n, rcond=None):
+    '''
+    [BUG?]: jit on GPU somehow demands insanely massive memeory
+    will delete this workaround once jnp.polyfit is available
+    '''
+    x = device_put(jnp.asarray(x) + 0.0)
+    y = device_put(jnp.asarray(y) + 0.0)
+    if rcond is None:
+        rcond = x.shape[0] * jnp.finfo(x.dtype).eps
+    order = int(n) + 1
+    lhs = jnp.vander(x, order)
+    rhs = y
+    scale = jnp.sqrt((lhs * lhs).sum(axis=0))
+    lhs /= scale
+    c = jnp.linalg.lstsq(lhs, rhs, rcond)[0]
+    c = (c.T/scale).T
+    return c
 
 
 def frft(f, a):
