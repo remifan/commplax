@@ -3,7 +3,7 @@ Commplax is a modern Python DSP library written in [JAX](https://github.com/goog
 
 - deal with Complex number well, thanks to JAX's native Complex number support
 - shipped with accelerated well-tested DSP algorithms and core operations
-- optimize computationally complex DSP (e.g. Diginal Back Propogation) which is tranditionally inconvenient to do
+- optimize computationally complex DSP (e.g. Digital Back Propogation) which is tranditionally inconvenient to do
 - optimize DSP with deep learning models written in JAX's derivitives (e.g. [TRAX](https://github.com/google/trax))
 - designed carefully to maximize the readlibity and usability of the codebase
 - flawlessly deploy to cloud runtime (e.g. [Colab](https://colab.research.google.com/), [Binder](https://mybinder.org/)) to share and colabrate
