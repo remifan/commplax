@@ -272,6 +272,9 @@ def finddelay(x, y):
 
 
 def fftconvolve(x, h, mode='full'):
+    x = jnp.atleast_1d(x)
+    h = jnp.atleast_1d(h)
+
     mode = mode.lower()
 
     if x.shape[0] < h.shape[0]:
@@ -319,7 +322,10 @@ def _fftconvolve(x, h):
 
 
 def convolve(a, v, mode='full', method='auto'):
+    a = jnp.atleast_1d(a)
+    v = jnp.atleast_1d(v)
     method = method.lower()
+
     if method == 'auto':
         method = 0
     elif method == 'fft':
@@ -347,8 +353,8 @@ def correlate(a, v, mode='same', method='auto'):
     c_{av}[k] = sum_n a[n+k] * conj(v[n])
     '''
     # NOTE: jnp.correlate() does not support complex inputs
-    a = device_put(a)
-    v = device_put(v)
+    a = jnp.atleast_1d(a)
+    v = jnp.atleast_1d(v)
     z = convolve(a, v[::-1].conj(), mode=mode, method=method)
     return z
 
