@@ -34,7 +34,7 @@ run following steps in Python virtual enviroment (e.g. conda, pipenv) is strongl
   `pip install -e '.'`
 
 ## Where to get help
-Commplax's is now under heavily development, any APIs might be changed constantly. It is encouraged to raise [Issue](https://github.com/remifan/commplax/issues) or join the [Dicussion panel](https://github.com/remifan/commplax/discussions)
+Commplax's is now under heavy development, any APIs might be changed constantly. It is encouraged to raise [Issue](https://github.com/remifan/commplax/issues) or join the [Dicussion panel](https://github.com/remifan/commplax/discussions)
 
 ## Open dataset for benchmarks
 - [LabPtPTm1](https://github.com/remifan/LabPtPTm1)
