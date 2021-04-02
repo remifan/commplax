@@ -37,7 +37,7 @@ run following steps in Python virtual enviroment (e.g. conda, pipenv) is strongl
 Commplax's is now under heavily development, any APIs might be changed constantly. It is encouraged to raise [Issue](https://github.com/remifan/commplax/issues) or join the [Dicussion panel](https://github.com/remifan/commplax/discussions)
 
 ## Open dataset for benchmarks
-prepared in progress, will be ready soon
+- [LabPtPTm1](https://github.com/remifan/LabPtPTm1)
 
 ## Citing Commplax
 Work in progress
