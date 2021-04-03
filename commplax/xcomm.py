@@ -1,9 +1,6 @@
-import numpy as np
 import jax
-from jax import grad, value_and_grad, lax, jit, vmap, numpy as jnp, devices, device_put
-from jax.ops import index, index_add, index_update
-from functools import partial
-from commplax import xop, comm, adaptive_filter as af
+from jax import jit, vmap, numpy as jnp, device_put
+from commplax import xop, comm
 
 
 def getpower(x, real=False):
@@ -204,7 +201,7 @@ def alignphase(y, x, testing_phases=4):
     return y * vmap(searchphase, in_axes=-1)(y, x)
 
 
-def localfoe(signal, frame_size=65536, frame_step=100, sps=1, method=lambda x: foe_mpowfftmax(x)[0]):
+def localfoe(signal, frame_size=16384, frame_step=5000, sps=1, method=lambda x: foe_mpowfftmax(x)[0]):
     '''
     resolution = samplerate / N / 4 / sps (linear interp.)
     '''
@@ -212,9 +209,15 @@ def localfoe(signal, frame_size=65536, frame_step=100, sps=1, method=lambda x: f
     return xop.framescaninterp(y, method, frame_size, frame_step, sps)
 
 
-def localpower(signal, frame_size=2000, frame_step=100):
+def localpower(signal, frame_size=5000, frame_step=1000):
     y = device_put(signal)
-    poweval = lambda c, y: (c, jnp.mean(jnp.abs(y)**2, axis=0))
+    poweval = lambda y: jnp.mean(jnp.abs(y)**2, axis=0)
     return xop.framescaninterp(y, poweval, frame_size, frame_step)
+
+
+def localdc(signal, frame_size=5000, frame_step=1000):
+    y = device_put(signal)
+    dceval = lambda y: jnp.mean(y, axis=0)
+    return xop.framescaninterp(y, dceval, frame_size, frame_step)
 
 

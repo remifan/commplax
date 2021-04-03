@@ -58,13 +58,8 @@ def _qammimo(y, R2, Rs, sps, taps, cma_samples):
     cma_init, cma_update, _ = af.mucma(R2=R2, dims=dims)
     rde_init, rde_update, rde_map = af.rde(Rs=Rs, dims=dims)
 
-    rtap = (taps + 1) // sps - 1
-    mimo_delay = int(np.ceil((rtap + 1) / sps) - 1)
-
-    # zero-pad to remove filter delay
-    y_pad = jnp.pad(y, [[mimo_delay * sps, taps - sps * (mimo_delay + 1)], [0,0]])
     # framing signal to enable parallelization (a.k.a `jax.vmap`)
-    yf = jnp.array(xop.frame(y_pad, taps, sps))
+    yf = af.frame(y, taps, sps)
 
     # get initial weights
     s0 = cma_init(taps=taps, dtype=y.dtype)

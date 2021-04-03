@@ -188,10 +188,10 @@ def framescaninterp(x, func, flen, fstep, P=1):
     xf = frame(x, flen, fstep, pad_end=True)
     F = xf.shape[0]
     _, ys = scan(fn, None, xf)
-    xp = P * (jnp.arange(F) * fstep + flen//2)
+    xp = jnp.arange(F) * fstep + flen // 2
     x = jnp.arange(N * P) / P
     interp = vmap(lambda x, xp, fp: jnp.interp(x, xp, fp), in_axes=(None, None, -1), out_axes=-1)
-    ysip = interp(x, xp, ys)
+    ysip = interp(x, xp, ys) / P
     return ysip
 
 
