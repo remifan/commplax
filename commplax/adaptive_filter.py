@@ -54,6 +54,8 @@ def adaptive_filter(af_maker, trainable=False):
         def _static_map(af_ps, af_xs):
             return static_map(af_ps, af_xs)
 
+        _update.trainable = trainable
+
         return AdaptiveFilter(_init, _update, _static_map)
 
     return _af_maker
@@ -75,7 +77,11 @@ def array(af_maker, replicas, axis=-1):
         @jax.jit
         @functools.wraps(update)
         def rep_update(af_state, af_inp):
-            af_state, af_out = jax.vmap(update, in_axes=axis, out_axes=axis)(af_state, af_inp)
+            if update.trainable:
+                in_axis = (-1, (-1, -1, None))
+            else:
+                in_axis = axis
+            af_state, af_out = jax.vmap(update, in_axes=in_axis, out_axes=axis)(af_state, af_inp)
             return af_state, af_out
 
         @jax.jit
@@ -137,15 +143,18 @@ def c2r(c):
     return r
 
 
-def unitarize_mimo_weights(w):
-    if len(w.shape) != 3 or w.shape[0] != w.shape[1]:
-        raise ValueError('bad shaped weights, must be like (a, a, b)')
-    if w.shape[0] != 2:
-        raise ValueError('unitarization is not yet applicable to MIMO with shape other than 2x2')
-    w = np.array(w)
-    w[1, 0] = -w[0, 1][::-1].conj()
-    w[1, 1] = w[0, 0][::-1].conj()
-    return w
+def mimozerodelaypads(taps, sps=2, rtap=None):
+    if rtap is None:
+        rtap = (taps + 1) // sps - 1
+    mimo_delay = int(np.ceil((rtap + 1) / sps) - 1)
+    pads = [[mimo_delay * sps, taps - sps * (mimo_delay + 1)], [0,0]]
+    return pads
+
+
+def frame(y, taps, sps, rtap=None):
+    y_pad = jnp.pad(y, mimozerodelaypads(taps=taps, sps=sps, rtap=rtap))
+    yf = jnp.array(xop.frame(y_pad, taps, sps))
+    return yf
 
 
 def make_train_argin(ys, truth=None, train=None, sps=1):
@@ -191,16 +200,11 @@ def cma(lr=1e-4, R2=1.32, const=None):
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
-    def init(w0=None, taps=19, dims=2, unitarize=True, dtype=np.complex64):
+    def init(w0=None, taps=19, dims=2, dtype=np.complex64):
         if w0 is None:
             w0 = np.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
             w0[np.arange(dims), np.arange(dims), ctap] = 1.
-        elif unitarize:
-            try:
-                w0 = unitarize_mimo_weights(w0)
-            except:
-                pass
         return w0.astype(dtype)
 
     def update(w, u):
@@ -279,7 +283,7 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
 
 
 @partial(adaptive_filter, trainable=True)
-def rde(dims=2, lr=1e-4, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
+def rde(dims=2, lr=2**-13, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
     '''
     References:
     [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
@@ -295,7 +299,7 @@ def rde(dims=2, lr=1e-4, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))),
             w0 = np.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
             w0[np.arange(dims), np.arange(dims), ctap] = 1.
-        return w0.astype(dtype)
+        return w0
 
     def update(w, inp):
         u, Rx, train = inp
@@ -303,7 +307,7 @@ def rde(dims=2, lr=1e-4, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))),
         def loss_fn(w, u):
             v = r2c(mimo(w, u)[None,:])
             R2 = jnp.where(train,
-                           Rx**2,
+                           jnp.abs(Rx)**2,
                            Rs[jnp.argmin(
                                jnp.abs(Rs[:,None] * v / jnp.abs(v) - v),
                                axis=0)]**2)
@@ -322,63 +326,72 @@ def rde(dims=2, lr=1e-4, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))),
 
 
 @partial(adaptive_filter, trainable=True)
-def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., grad_max=(50., 50.), eps=1e-8,
+def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., mu_b=1/2**10, grad_max=(50., 50.), eps=1e-8,
           const=comm.const("16QAM", norm=True)):
     '''
-    Impl. follows Fig. 6 in [1]
+    Enhancements
+    [1] add bias term to handle varying DC component
     References:
     [1] Mori, Y., Zhang, C. and Kikuchi, K., 2012. Novel configuration of
         finite-impulse-response filters tolerant to carrier-phase fluctuations
         in digital coherent optical receivers for higher-order quadrature
         amplitude modulation signals. Optics express, 20(24), pp.26236-26251.
     '''
-    def init(state0):
-        return state0
+    const = jnp.asarray(const)
+
+    def init(dims=2, taps=19, dtype=jnp.complex64):
+        w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
+        f0 = jnp.full((dims,), 1., dtype=dtype)
+        s0 = jnp.full((dims,), 1., dtype=dtype)
+        b0 = jnp.full((dims,), 0., dtype=dtype)
+        return (w0, f0, s0, b0)
 
     def update(state, inp):
-        w, f, s, = state
+        w, f, s, b = state
         u, x, train = inp
 
         v = mimo(w, u)
 
-        z = v * f * s
-
+        z = v * f * s + b
         d = jnp.where(train, x, const[jnp.argmin(jnp.abs(const[:,None] - z[None,:]), axis=0)])
+        l = jnp.sum(jnp.abs(z - d)**2)
 
         psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
-        e_p = d * psi_hat - v
-        e_f = d - f * v
-        e_s = d - s * f * v
+        e_w = (d - b) * psi_hat - v
+        e_f = d - b - f * v
+        e_s = d - b - s * f * v
         gs = -1. / (jnp.abs(f * v)**2 + eps) * e_s * (f * v).conj()
         gf = -1. / (jnp.abs(v)**2 + eps) * e_f * v.conj()
+        gb = z - d
 
         # clip the grads of f and s which are less regulated than w,
         # it may stablize this algo. in some corner cases?
-        gw = -e_p[:, None, None] * u.conj().T[None, ...]
+        gw = -e_w[:, None, None] * u.conj().T[None, ...]
         gf = jnp.where(jnp.abs(gf) > grad_max[0], gf / jnp.abs(gf) * grad_max[0], gf)
         gs = jnp.where(jnp.abs(gs) > grad_max[1], gs / jnp.abs(gs) * grad_max[1], gs)
 
-        out = (w, f, s, d)
+        out = ((w, f, s, b), (l, d))
 
         # update
         w = w - mu_w * gw
         f = f - mu_f * gf
         s = s - mu_s * gs
+        b = b - mu_b * gb
 
-        state = (w, f, s)
+        state = (w, f, s, b)
 
         return state, out
 
     def static_map(ps, yf):
-        ws, fs, ss = ps
-        return jax.vmap(mimo)(ws, yf) * fs * ss
+        ws, fs, ss, bs = ps
+        return jax.vmap(mimo)(ws, yf) * fs * ss + bs
 
     return AdaptiveFilter(init, update, static_map)
 
 
 @partial(adaptive_filter, trainable=True)
 def cpane_ekf(beta=0.7,
-              Q=5e-5 * (1.+1j),
+              Q=1e-4 * (1.+1j),
               R=1e-2 * (1.+1j),
               const=comm.const("16QAM", norm=True)):
     '''
