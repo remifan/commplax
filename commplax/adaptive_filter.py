@@ -113,7 +113,7 @@ def r2c(r):
     '''
     if not jnp.iscomplexobj(r):
         if r.ndim != 2:
-            raise ValueError('invalid ndim, needs 2 but got %d' % x.ndim)
+            raise ValueError('invalid ndim, expected 2 but got %d' % r.ndim)
         r = r.reshape((r.shape[0], r.shape[-1] // 2, -1))
         c = r[..., 0] + 1j * r[..., 1]
     else:
@@ -136,7 +136,7 @@ def c2r(c):
     '''
     if jnp.iscomplexobj(c):
         if c.ndim != 2:
-            raise ValueError('invalid ndim, needs 2 but got %d' % c.ndim)
+            raise ValueError('invalid ndim, expected 2 but got %d' % c.ndim)
         r = jnp.stack([c.real, c.imag], axis=-1).reshape((c.shape[0], -1))
     else:
         r = c
