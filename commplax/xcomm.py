@@ -1,6 +1,6 @@
 import jax
 from jax import jit, vmap, numpy as jnp, device_put
-from commplax import xop, comm
+from commplax import xop, comm, experimental as exp
 
 
 def getpower(x, real=False):
@@ -201,12 +201,21 @@ def alignphase(y, x, testing_phases=4):
     return y * vmap(searchphase, in_axes=-1)(y, x)
 
 
-def localfoe(signal, frame_size=16384, frame_step=5000, sps=1, method=lambda x: foe_mpowfftmax(x)[0]):
+def localfoe(signal, frame_size=16384, frame_step=5000, sps=1, fitkind=None, degree=2,
+             method=lambda x: foe_mpowfftmax(x)[0]):
     '''
     resolution = samplerate / N / 4 / sps (linear interp.)
     '''
     y = device_put(signal)
-    return xop.framescaninterp(y, method, frame_size, frame_step, sps)
+    dims = y.shape[-1]
+    fo_local = xop.framescaninterp(y, method, frame_size, frame_step, sps)
+    if fitkind is not None:
+        if fitkind.lower() == 'poly':
+            fo_T = jnp.tile(jnp.arange(fo_local.shape[0])[:, None], (1, dims))
+            fo_local = exp.polyfitval(fo_T, fo_local, degree)
+        else:
+            raise ValueError('invlaid fitting method')
+    return fo_local
 
 
 def localpower(signal, frame_size=5000, frame_step=1000):

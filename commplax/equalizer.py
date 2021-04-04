@@ -74,30 +74,21 @@ def _qammimo(y, R2, Rs, sps, taps, cma_samples):
     return x_hat, loss, ws
 
 
-def qamfoe(x, uselocalfoe=False, lfoe_fs=16384, lfoe_st=5000, backend='cpu'):
+def qamfoe(x, local=False, fitkind=None, lfoe_fs=16384, lfoe_st=5000, backend='cpu'):
     x = device_put(x)
     return jit(_qamfoe,
-               static_argnums=(1, 2, 3),
-               backend=backend)(x, uselocalfoe, lfoe_fs, lfoe_st)
+               static_argnums=(1, 2, 3, 4),
+               backend=backend)(x, local, fitkind, lfoe_fs, lfoe_st)
 
 
-def _qamfoe(x, uselocalfoe, lfoe_fs, lfoe_st):
+def _qamfoe(x, local, fitkind, lfoe_fs, lfoe_st):
     dims = x.shape[-1]
 
-    if uselocalfoe:
-        fo_local = xcomm.localfoe(x, frame_size=lfoe_fs, frame_step=lfoe_st, sps=1)
-        fo_local = jnp.mean(fo_local, axis=-1)
-        # xop.polyfit is inaccurate!
-        # fo_T = np.arange(len(fo_local))
-        # fo_poly = xop.polyfit(fo_T, fo_local, 3)
-        # fo_local_poly = jnp.polyval(fo_poly, fo_T)
-        # x *= jnp.tile(jnp.exp(-1j * jnp.cumsum(fo_local_poly))[:, None], (1, dims))
-        # fo = fo_poly
-        x *= jnp.tile(jnp.exp(-1j * jnp.cumsum(fo_local))[:, None], (1, dims))
-        fo = fo_local
+    if local:
+        fo = xcomm.localfoe(x, frame_size=lfoe_fs, frame_step=lfoe_st, sps=1, fitkind=fitkind).mean(axis=-1)
+        x *= jnp.tile(jnp.exp(-1j * jnp.cumsum(fo))[:, None], (1, dims))
     else:
-        fo, fo_metric = xcomm.foe_mpowfftmax(x)
-        fo = jnp.mean(fo)
+        fo = xcomm.foe_mpowfftmax(x)[0].mean()
         T = jnp.arange(x.shape[0])
         x *= jnp.tile(jnp.exp(-1j * fo * T)[:, None], (1, dims))
 
