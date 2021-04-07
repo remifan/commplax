@@ -3,7 +3,7 @@ import functools
 import numpy as np
 from typing import Any, Callable, NamedTuple, Tuple, Union
 from functools import partial
-from jax import lax, jit, numpy as jnp
+from jax import jit, numpy as jnp
 from commplax import comm, xop
 from jax.tree_util import tree_flatten, tree_unflatten, register_pytree_node
 
@@ -147,7 +147,7 @@ def mimozerodelaypads(taps, sps=2, rtap=None):
     if rtap is None:
         rtap = (taps + 1) // sps - 1
     mimo_delay = int(np.ceil((rtap + 1) / sps) - 1)
-    pads = [[mimo_delay * sps, taps - sps * (mimo_delay + 1)], [0,0]]
+    pads = np.array([[mimo_delay * sps, taps - sps * (mimo_delay + 1)], [0,0]])
     return pads
 
 
@@ -193,6 +193,20 @@ def make_train_argin(ys, truth=None, train=None, sps=1):
 def iterate(update, state, signal, truth=None, train=None, device=cpus[0]):
     xs = make_train_argin(signal, truth, train)
     return xop.scan(update, state, xs, jit_device=device)
+
+
+def mimoinitializer(taps, dims, dtype, initkind):
+    initkind = initkind.lower()
+    if initkind == 'zeros':
+        w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
+    elif initkind == 'centralspike':
+        w0 = np.zeros((dims, dims, taps), dtype=dtype)
+        ctap = (taps + 1) // 2 - 1
+        w0[np.arange(dims), np.arange(dims), ctap] = 1.
+        w0 = jnp.array(w0)
+    else:
+        raise ValueError('invalid initkind %s' % initkind)
+    return w0
 
 
 @adaptive_filter
@@ -243,25 +257,27 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
             ctap = (taps + 1) // 2 - 1
             w0[np.arange(dims), np.arange(dims), ctap] = 1.
 
+        w0 = jnp.asarray(w0).astype(dtype)
         z = jnp.zeros((delta, dims), dtype=dtype)
         r = jnp.zeros((dims, dims, delta), dtype=dtype)
-        return w0.astype(dtype), z, r
+        return w0, z, r, jnp.asarray(beta)
 
     def update(state, u):
-        w, z, r = state
+        w, z, r, ipowbeta = state
 
         z = jnp.concatenate((r2c(mimo(w, u)[None, :]), z[:-1,:]))
         z0 = jnp.repeat(z, dims, axis=-1)
         z1 = jnp.tile(z, (1, dims))
         rt = jax.vmap(lambda a, b: a[0] * b.conj(), in_axes=-1, out_axes=0)(z0, z1).reshape(r.shape)
-        r = beta * r + (1 - beta) * rt
-        r_sqsum = jnp.sum(jnp.abs(r)**2, axis=-1)
+        r = beta * r + (1 - beta) * rt # exponential moving average
+        rhat = r / (1 - ipowbeta) # bias correction
+        r_sqsum = jnp.sum(jnp.abs(rhat)**2, axis=-1)
 
         v = mimo(w, u)
         lcma = jnp.sum(jnp.abs(jnp.abs(v)**2 - R2)**2)
         lmu = 2 * (jnp.sum(r_sqsum) - jnp.sum(jnp.diag(r_sqsum)))
         gcma = 4 * (v * (jnp.abs(v)**2 - R2))[..., None, None] * jnp.conj(u).T[None, ...]
-        gmu_tmp_full = (4 * r[..., None, None]
+        gmu_tmp_full = (4 * rhat[..., None, None]
                         * z.T[None, ..., None, None]
                         * jnp.conj(u).T[None, None, None, ...]) # shape: [dims, dims, delta, dims, T]
         # reduce delta axis
@@ -273,7 +289,8 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
 
         o = (l, w)
         w = w - lr * g
-        state = (w, z, r)
+        ipowbeta *= beta
+        state = (w, z, r, ipowbeta)
         return state, o
 
     def static_map(ws, yf):
@@ -327,7 +344,7 @@ def rde(dims=2, lr=2**-13, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))
 
 @partial(adaptive_filter, trainable=True)
 def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., mu_b=1/2**10, grad_max=(50., 50.), eps=1e-8,
-          const=comm.const("16QAM", norm=True)):
+          const=comm.const("16QAM", norm=True), lockgain=False):
     '''
     Enhancements
     [1] add bias term to handle varying DC component
@@ -339,8 +356,8 @@ def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., mu_b=1/2**10, grad_max=(50., 50.),
     '''
     const = jnp.asarray(const)
 
-    def init(dims=2, taps=19, dtype=jnp.complex64):
-        w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
+    def init(taps=19, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
+        w0 = mimoinitializer(taps, dims, dtype, mimoinit)
         f0 = jnp.full((dims,), 1., dtype=dtype)
         s0 = jnp.full((dims,), 1., dtype=dtype)
         b0 = jnp.full((dims,), 0., dtype=dtype)
@@ -378,6 +395,12 @@ def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., mu_b=1/2**10, grad_max=(50., 50.),
         s = s - mu_s * gs
         b = b - mu_b * gb
 
+        if lockgain:
+            w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
+            w /= (jnp.sqrt(jnp.sum(jnp.abs(w)**2, axis=(1, 2))))[:, None, None]
+            f /= jnp.abs(f)
+            s /= jnp.abs(s)
+
         state = (w, f, s, b)
 
         return state, out
@@ -402,22 +425,23 @@ def cpane_ekf(beta=0.7,
     const = jnp.asarray(const)
 
     def init(p0=0j):
-        state0 = (p0, 1j, 0j)
+        state0 = (p0, 1j, 0j, beta)
         return state0
 
     def update(state, inp):
 
-        Psi_c, P_c, Psi_a = state
+        Psi_c, P_c, Psi_a, ipowbeta = state
         y, x, train = inp
 
         Psi_p = Psi_c
         P_p = P_c + Q
 
-        Psi_a = beta * Psi_a + (1 - beta) * Psi_c
+        Psi_a = beta * Psi_a + (1 - beta) * Psi_c # exponential moving average
+        Psi_ahat = Psi_a / (1 - ipowbeta) # bias correction
 
         d = jnp.where(train,
                       x,
-                      const[jnp.argmin(jnp.abs(const - y * jnp.exp(-1j * Psi_a)))])
+                      const[jnp.argmin(jnp.abs(const - y * jnp.exp(-1j * Psi_ahat)))])
 
         H = 1j * d * jnp.exp(1j * Psi_p)
         K = P_p * H.conj() / (H * P_p * H.conj() + R)
@@ -427,8 +451,9 @@ def cpane_ekf(beta=0.7,
 
         Psi_c = Psi_p + K * v
         P_c = (1. - K * H) * P_p
+        ipowbeta *= beta
 
-        state = (Psi_c, P_c, Psi_a)
+        state = (Psi_c, P_c, Psi_a, ipowbeta)
 
         return state, out
 
