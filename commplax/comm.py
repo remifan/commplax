@@ -195,11 +195,11 @@ def anuqrng_bit(L):
     return bits
 
 
-def rcosdesign(beta, span, sps, shape='normal', dtype=np.float):
+def rcosdesign(beta, span, sps, shape='normal', dtype=np.float64):
     ''' ref:
         [1] https://en.wikipedia.org/wiki/Root-raised-cosine_filter
         [2] https://en.wikipedia.org/wiki/Raised-cosine_filter
-        [3] Matlab R2019b rcosdesign.m
+        [3] Matlab R2019b `rcosdesign`
     '''
 
     delay = span * sps / 2
@@ -275,6 +275,11 @@ def normpower(x, real=False):
         return x.real / np.sqrt(pr) + 1j * x.imag / np.sqrt(pi)
     else:
         return x / np.sqrt(getpower(x))
+
+
+def qamscale(modformat):
+    M = parseqamorder(modformat)
+    return np.sqrt((M-1) * 2 / 3)
 
 
 def dbp_params(

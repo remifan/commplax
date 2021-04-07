@@ -7,6 +7,54 @@ from commplax import xop, comm
 cpus = devices("cpu")
 gpus = devices("gpu")
 
+def update(state, inp):
+    w, f, s, b, i, pi, po = state
+    u, x, train = inp
+
+    v = mimo(w, u)
+
+    z = v * f * s + b
+    d = jnp.where(train, x, const[jnp.argmin(jnp.abs(const[:,None] - z[None,:]), axis=0)])
+    l = jnp.sum(jnp.abs(z - d)**2)
+
+    psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
+    e_w = (d - b) * psi_hat - v
+    e_f = d - b - f * v
+    e_s = d - b - s * f * v
+    gs = -1. / (jnp.abs(f * v)**2 + eps) * e_s * (f * v).conj()
+    gf = -1. / (jnp.abs(v)**2 + eps) * e_f * v.conj()
+    gb = z - d
+
+    # clip the grads of f and s which are less regulated than w,
+    # it may stablize this algo. in some corner cases?
+    gw = -e_w[:, None, None] * u.conj().T[None, ...]
+    gf = jnp.where(jnp.abs(gf) > grad_max[0], gf / jnp.abs(gf) * grad_max[0], gf)
+    gs = jnp.where(jnp.abs(gs) > grad_max[1], gs / jnp.abs(gs) * grad_max[1], gs)
+
+    pihat = pi / (1 - beta**(i + 1)) + 1e-8 # bias correction
+    pohat = po / (1 - beta**(i + 1)) + 1e-8 # bias correction
+    gain = jnp.sqrt(pohat / pihat)
+    out = ((w, f, s, b,), (l, d, gain))
+
+    # update
+    w = w - mu_w * gw
+    f = f - mu_f * gf
+    s = s - mu_s * gs
+    b = b - mu_b * gb
+    pi = ((1 - beta) * jnp.mean(jnp.abs(u)**2, axis=0).sum() + beta * pi)
+    po = ((1 - beta) * jnp.sum(jnp.abs(z)**2) + beta * po)
+    i += 1
+
+    # w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
+    # f /= jnp.abs(f)
+    # s /= jnp.abs(s)
+    lb = gainboundaries[0] * (1. - 1. / (gamma * i + 1.))
+    ub = gainboundaries[1] * (1. + 1. / (gamma * i))
+    gainval = jnp.array([gainboundaries[0], 1., gainboundaries[1]])
+    w /= gainval[jnp.sum(gain > jnp.array([lb, ub]))]
+
+    state = (w, f, s, b, i, pi, po)
+
 
 def mimo(w, u):
     v = jnp.einsum('ijt,tj->i', w, u) # no dimension axis

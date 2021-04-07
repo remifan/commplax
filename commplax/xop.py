@@ -21,8 +21,12 @@ def scan(f, init, xs, length=None, reverse=False, unroll=1, jit_device=None, jit
     return _scan(f, init, xs, length, reverse, unroll)
 
 
-@partial(jit, static_argnums=(2,))
 def conv1d_lax(signal, kernel, mode='SAME'):
+    return _conv1d_lax(signal, kernel, mode)
+
+
+@partial(jit, static_argnums=(2,))
+def _conv1d_lax(signal, kernel, mode):
     '''
     CPU impl. is insanely slow for large kernels, jaxlib-cuda (i.e. cudnn's GPU impl.)
     is highly recommended
