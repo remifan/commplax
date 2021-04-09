@@ -282,7 +282,7 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
                         * jnp.conj(u).T[None, None, None, ...]) # shape: [dims, dims, delta, dims, T]
         # reduce delta axis
         gmu_tmp_dr = jnp.sum(gmu_tmp_full, axis=2) # shape: [dims, dims, dims, T]
-        # sum correlation from the rest channels
+        # cross correlation = full correlation - self correlation
         gmu = jnp.sum(gmu_tmp_dr, axis=1) - gmu_tmp_dr[jnp.arange(dims), jnp.arange(dims), ...]
         l = lcma + lmu
         g = gcma + gmu
@@ -343,7 +343,7 @@ def rde(dims=2, lr=2**-13, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))
 
 
 @partial(adaptive_filter, trainable=True)
-def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., mu_b=1/2**10, grad_max=(50., 50.), eps=1e-8,
+def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**12, grad_max=(50., 50.), eps=1e-8,
           const=comm.const("16QAM", norm=True), lockgain=False):
     '''
     Enhancements
@@ -367,23 +367,32 @@ def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., mu_b=1/2**10, grad_max=(50., 50.),
         w, f, s, b = state
         u, x, train = inp
 
-        v = mimo(w, u)
+        if lockgain:
+            w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
+            w /= (jnp.sqrt(jnp.sum(jnp.abs(w)**2, axis=(1, 2))))[:, None, None] + eps
+            f /= jnp.abs(f) + eps
+            s /= jnp.abs(s) + eps
 
-        z = v * f * s + b
+        v = mimo(w, u)
+        k = v * f
+        c = k * s
+        z = c + b
         d = jnp.where(train, x, const[jnp.argmin(jnp.abs(const[:,None] - z[None,:]), axis=0)])
         l = jnp.sum(jnp.abs(z - d)**2)
 
         psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
         e_w = (d - b) * psi_hat - v
-        e_f = d - b - f * v
-        e_s = d - b - s * f * v
-        gs = -1. / (jnp.abs(f * v)**2 + eps) * e_s * (f * v).conj()
+        e_f = d - b - k
+        e_s = d - b - c
+        e_b = d - z
+        gw = -1. / ((jnp.abs(u)**2).sum() + eps) * e_w[:, None, None] * u.conj().T[None, ...]
+        # gw = -e_w[:, None, None] * u.conj().T[None, ...]
         gf = -1. / (jnp.abs(v)**2 + eps) * e_f * v.conj()
-        gb = z - d
+        gs = -1. / (jnp.abs(k)**2 + eps) * e_s * k.conj()
+        gb = -e_b
 
         # clip the grads of f and s which are less regulated than w,
         # it may stablize this algo. in some corner cases?
-        gw = -e_w[:, None, None] * u.conj().T[None, ...]
         gf = jnp.where(jnp.abs(gf) > grad_max[0], gf / jnp.abs(gf) * grad_max[0], gf)
         gs = jnp.where(jnp.abs(gs) > grad_max[1], gs / jnp.abs(gs) * grad_max[1], gs)
 
@@ -394,12 +403,6 @@ def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., mu_b=1/2**10, grad_max=(50., 50.),
         f = f - mu_f * gf
         s = s - mu_s * gs
         b = b - mu_b * gb
-
-        if lockgain:
-            w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
-            w /= (jnp.sqrt(jnp.sum(jnp.abs(w)**2, axis=(1, 2))))[:, None, None]
-            f /= jnp.abs(f)
-            s /= jnp.abs(s)
 
         state = (w, f, s, b)
 
@@ -413,24 +416,28 @@ def ddlms(mu_w=1/2**10, mu_f=1/2**6, mu_s=0., mu_b=1/2**10, grad_max=(50., 50.),
 
 
 @partial(adaptive_filter, trainable=True)
-def cpane_ekf(beta=0.7,
-              Q=1e-4 * (1.+1j),
-              R=1e-2 * (1.+1j),
+def cpane_ekf(alpha=0.99,
+              beta=0.8,
+              Q=1e-4 + 0j,
+              R=1e-2 + 0j,
+              akf=True,
               const=comm.const("16QAM", norm=True)):
     '''
     References:
     [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
-    of phase and amplitude noise in coherent QAM systems. Optics express, 24(6), pp.6391-6401.
+        of phase and amplitude noise in coherent QAM systems. Optics express, 24(6), pp.6391-6401.
+    [2] Akhlaghi, Shahrokh, Ning Zhou, and Zhenyu Huang. "Adaptive adjustment of noise
+        covariance in Kalman filter for dynamic state estimation." 2017 IEEE power & energy
+        society general meeting. IEEE, 2017.
     '''
     const = jnp.asarray(const)
 
     def init(p0=0j):
-        state0 = (p0, 1j, 0j, beta)
+        state0 = (p0, 1j, 0j, Q, R, beta)
         return state0
 
     def update(state, inp):
-
-        Psi_c, P_c, Psi_a, ipowbeta = state
+        Psi_c, P_c, Psi_a, Q, R, ipowbeta = state
         y, x, train = inp
 
         Psi_p = Psi_c
@@ -447,13 +454,16 @@ def cpane_ekf(beta=0.7,
         K = P_p * H.conj() / (H * P_p * H.conj() + R)
         v = y - d * jnp.exp(1j * Psi_p)
 
-        out = (Psi_c, d)
+        out = (Psi_c, (Q, R))
 
         Psi_c = Psi_p + K * v
         P_c = (1. - K * H) * P_p
+        e = y - d * jnp.exp(1j * Psi_c)
+        Q = alpha * Q + (1. - alpha) * K * v * v.conj() * K.conj() if akf else Q
+        R = alpha * R + (1 - alpha) * (e * e.conj() + H * P_p * H.conj()) if akf else R
         ipowbeta *= beta
 
-        state = (Psi_c, P_c, Psi_a, ipowbeta)
+        state = (Psi_c, P_c, Psi_a, Q, R, ipowbeta)
 
         return state, out
 
