@@ -704,3 +704,96 @@ def step_anf(params, inputs):
     return params, outputs
 
 
+def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**12, grad_max=(50., 50.), eps=1e-8,
+          vss=True, rho=1e-4, const=comm.const("16QAM", norm=True), lockgain=False):
+    '''
+    Enhancements
+    [1] add bias term to handle varying DC component
+    References:
+    [1] Mori, Y., Zhang, C. and Kikuchi, K., 2012. Novel configuration of
+        finite-impulse-response filters tolerant to carrier-phase fluctuations
+        in digital coherent optical receivers for higher-order quadrature
+        amplitude modulation signals. Optics express, 20(24), pp.26236-26251.
+    [2] Mathews, V. John, and Zhenhua Xie. "A stochastic gradient adaptive filter with
+        gradient adaptive step size." IEEE transactions on Signal Processing 41.6 (1993): 2075-2087.
+    '''
+    const = jnp.asarray(const)
+
+    def init(taps=19, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
+        w0 = mimoinitializer(taps, dims, dtype, mimoinit)
+        f0 = jnp.full((dims,), 1., dtype=dtype)
+        s0 = jnp.full((dims,), 1., dtype=dtype)
+        b0 = jnp.full((dims,), 0., dtype=dtype)
+        mu_f0 = jnp.full(dims, mu_f)
+        mu_s0 = jnp.full(dims, mu_s)
+        mu_b0 = jnp.full(dims, mu_b)
+        lv0 = jnp.zeros(dims, dtype)
+        lk0 = jnp.zeros(dims, dtype)
+        lc0 = jnp.zeros(dims, dtype)
+        le_f0 = jnp.zeros(dims, dtype)
+        le_s0 = jnp.zeros(dims, dtype)
+        le_b0 = jnp.zeros(dims, dtype)
+        return (w0, f0, s0, b0, mu_f0, mu_s0, mu_b0, lv0, lk0, lc0, le_f0, le_s0, le_b0)
+
+    def update(state, inp):
+        w, f, s, b, mu_f, mu_s, mu_b, lv, lk, lc, le_f, le_s, le_b = state
+        u, x, train = inp
+
+        v = mimo(w, u)
+        k = v * f
+        c = k * s
+        z = c + b
+        d = jnp.where(train, x, const[jnp.argmin(jnp.abs(const[:,None] - z[None,:]), axis=0)])
+        l = jnp.sum(jnp.abs(z - d)**2)
+
+        psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
+        e_w = (d - b) * psi_hat - v
+        e_f = d - b - k
+        e_s = d - b - c
+        e_b = d - z
+        gw = -1. / ((jnp.abs(u)**2).sum() + eps) * e_w[:, None, None] * u.conj().T[None, ...]
+        # gw = -e_w[:, None, None] * u.conj().T[None, ...]
+        gf = -1. / (jnp.abs(v)**2 + eps) * e_f * v.conj()
+        gs = -1. / (jnp.abs(k)**2 + eps) * e_s * k.conj()
+        gb = -e_b
+
+        # clip the grads of f and s which are less regulated than w,
+        # it may stablize this algo. in some corner cases?
+        gf = jnp.where(jnp.abs(gf) > grad_max[0], gf / jnp.abs(gf) * grad_max[0], gf)
+        gs = jnp.where(jnp.abs(gs) > grad_max[1], gs / jnp.abs(gs) * grad_max[1], gs)
+
+        out = ((w, f, s, b), (l, d, mu_f, mu_s, mu_b))
+
+        # auto stepsize adjustment[2]
+        if vss:
+            mu_f_ub = 0.8 * 2 / (jnp.abs(v)**2)
+            mu_f += mu_f / (mu_f + eps) * rho * 2 * (e_f * le_f.conj() * lv.conj() * v).real
+            mu_f = jnp.minimum(mu_f, mu_f_ub)
+            mu_s_ub = 0.8 * 2 / (jnp.abs(k)**2)
+            mu_s += mu_s / (mu_s + eps) * rho * 2 * (e_s * le_s.conj() * lk.conj() * k).real
+            mu_s = jnp.minimum(mu_s, mu_s_ub)
+            # mu_b_ub = 0.8 * 2 / (jnp.abs(c)**2)
+            # mu_b += mu_b / (mu_b + eps) * 1e-4 * 2 * (e_b * le_b.conj() * lc.conj() * c).real
+            # mu_b = jnp.minimum(mu_b, mu_b_ub)
+
+        # update
+        w = w - mu_w * gw
+        f = f - mu_f * gf
+        s = s - mu_s * gs
+        b = b - mu_b * gb
+
+        if lockgain:
+            w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
+            w /= (jnp.sqrt(jnp.sum(jnp.abs(w)**2, axis=(1, 2))))[:, None, None]
+            f /= jnp.abs(f)
+            s /= jnp.abs(s)
+
+        state = (w, f, s, b, mu_f, mu_s, mu_b, v, k, c, e_f, e_s, e_b)
+
+        return state, out
+
+    def static_map(ps, yf):
+        ws, fs, ss, bs = ps
+        return jax.vmap(mimo)(ws, yf) * fs * ss + bs
+
+    return AdaptiveFilter(init, update, static_map)

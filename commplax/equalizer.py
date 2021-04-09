@@ -1,5 +1,5 @@
 import numpy as np
-from jax import jit, device_put, numpy as jnp
+from jax import jit, device_put, numpy as jnp, lax
 from commplax import xop, comm, xcomm, util, adaptive_filter as af
 
 

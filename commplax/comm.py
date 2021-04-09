@@ -260,19 +260,18 @@ def shape_signal(x):
 
     return x
 
+
 def getpower(x, real=False):
     ''' get signal power '''
-    if real:
-        return np.mean(x.real**2, axis=0), np.mean(x.imag**2, axis=0)
-    else:
-        return np.mean(abs(x)**2, axis=0)
+    return np.mean(x.real**2, axis=0) + np.array(1j) * np.mean(x.imag**2, axis=0) \
+        if real else np.mean(abs(x)**2, axis=0)
 
 
 def normpower(x, real=False):
     ''' normalize signal power '''
     if real:
-        pr, pi = getpower(x, real=True)
-        return x.real / np.sqrt(pr) + 1j * x.imag / np.sqrt(pi)
+        p = getpower(x, real=True)
+        return x.real / np.sqrt(p.real) + 1j * x.imag / np.sqrt(p.imag)
     else:
         return x / np.sqrt(getpower(x))
 
