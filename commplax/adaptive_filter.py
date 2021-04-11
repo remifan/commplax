@@ -228,9 +228,9 @@ def cma(lr=1e-4, R2=1.32, const=None):
             return loss
 
         l, g = jax.value_and_grad(loss_fn)(w, u)
-        o = (l, w)
+        out = (w, l)
         w = w - lr * g.conj()
-        return w, o
+        return w, out
 
     def static_map(ws, yf):
         return jax.vmap(mimo)(ws, yf)
@@ -263,14 +263,14 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
         return w0, z, r, jnp.asarray(beta)
 
     def update(state, u):
-        w, z, r, ipowbeta = state
+        w, z, r, betapow = state
 
         z = jnp.concatenate((r2c(mimo(w, u)[None, :]), z[:-1,:]))
         z0 = jnp.repeat(z, dims, axis=-1)
         z1 = jnp.tile(z, (1, dims))
         rt = jax.vmap(lambda a, b: a[0] * b.conj(), in_axes=-1, out_axes=0)(z0, z1).reshape(r.shape)
         r = beta * r + (1 - beta) * rt # exponential moving average
-        rhat = r / (1 - ipowbeta) # bias correction
+        rhat = r / (1 - betapow) # bias correction due to small beta
         r_sqsum = jnp.sum(jnp.abs(rhat)**2, axis=-1)
 
         v = mimo(w, u)
@@ -280,18 +280,18 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
         gmu_tmp_full = (4 * rhat[..., None, None]
                         * z.T[None, ..., None, None]
                         * jnp.conj(u).T[None, None, None, ...]) # shape: [dims, dims, delta, dims, T]
-        # reduce delta axis
+        # reduce delta axis first
         gmu_tmp_dr = jnp.sum(gmu_tmp_full, axis=2) # shape: [dims, dims, dims, T]
         # cross correlation = full correlation - self correlation
         gmu = jnp.sum(gmu_tmp_dr, axis=1) - gmu_tmp_dr[jnp.arange(dims), jnp.arange(dims), ...]
         l = lcma + lmu
         g = gcma + gmu
 
-        o = (l, w)
+        out = (w, l)
         w = w - lr * g
-        ipowbeta *= beta
-        state = (w, z, r, ipowbeta)
-        return state, o
+        betapow *= beta
+        state = (w, z, r, betapow)
+        return state, out
 
     def static_map(ws, yf):
         return jax.vmap(mimo)(ws, yf)
@@ -300,7 +300,7 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
 
 
 @partial(adaptive_filter, trainable=True)
-def rde(dims=2, lr=2**-13, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
+def rde(dims=2, lr=2**-15, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
     '''
     References:
     [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
@@ -311,7 +311,7 @@ def rde(dims=2, lr=2**-13, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))
     if const is not None:
         Rs = jnp.array(jnp.unique(jnp.abs(const)))
 
-    def init(w0=None, taps=19, dtype=np.complex64):
+    def init(w0=None, taps=31, dtype=np.complex64):
         if w0 is None:
             w0 = np.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
@@ -332,7 +332,7 @@ def rde(dims=2, lr=2**-13, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))
             return l
 
         l, g = jax.value_and_grad(loss_fn)(w, u)
-        out = (l, w)
+        out = (w, l)
         w = w - lr * g.conj()
         return w, out
 
@@ -343,8 +343,8 @@ def rde(dims=2, lr=2**-13, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))
 
 
 @partial(adaptive_filter, trainable=True)
-def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**12, grad_max=(50., 50.), eps=1e-8,
-          const=comm.const("16QAM", norm=True), lockgain=False):
+def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**11, grad_max=(50., 50.), eps=1e-8,
+          beta=0., const=comm.const("16QAM", norm=True), lockgain=False):
     '''
     Enhancements
     [1] add bias term to handle varying DC component
@@ -356,15 +356,16 @@ def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**12, grad_max=(50., 50.), 
     '''
     const = jnp.asarray(const)
 
-    def init(taps=19, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
+    def init(taps=31, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
         w0 = mimoinitializer(taps, dims, dtype, mimoinit)
         f0 = jnp.full((dims,), 1., dtype=dtype)
         s0 = jnp.full((dims,), 1., dtype=dtype)
         b0 = jnp.full((dims,), 0., dtype=dtype)
-        return (w0, f0, s0, b0)
+        fshat0 = jnp.full((dims,), 1., dtype=dtype)
+        return (w0, f0, s0, b0, fshat0)
 
     def update(state, inp):
-        w, f, s, b = state
+        w, f, s, b, fshat = state
         u, x, train = inp
 
         if lockgain:
@@ -377,7 +378,8 @@ def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**12, grad_max=(50., 50.), 
         k = v * f
         c = k * s
         z = c + b
-        d = jnp.where(train, x, const[jnp.argmin(jnp.abs(const[:,None] - z[None,:]), axis=0)])
+        q = v * fshat + b
+        d = jnp.where(train, x, const[jnp.argmin(jnp.abs(const[:,None] - q[None,:]), axis=0)])
         l = jnp.sum(jnp.abs(z - d)**2)
 
         psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
@@ -391,6 +393,7 @@ def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**12, grad_max=(50., 50.), 
         gs = -1. / (jnp.abs(k)**2 + eps) * e_s * k.conj()
         gb = -e_b
 
+
         # clip the grads of f and s which are less regulated than w,
         # it may stablize this algo. in some corner cases?
         gf = jnp.where(jnp.abs(gf) > grad_max[0], gf / jnp.abs(gf) * grad_max[0], gf)
@@ -403,8 +406,9 @@ def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**12, grad_max=(50., 50.), 
         f = f - mu_f * gf
         s = s - mu_s * gs
         b = b - mu_b * gb
+        fshat = beta * fshat + (1 - beta) * (f * s)
 
-        state = (w, f, s, b)
+        state = (w, f, s, b, fshat)
 
         return state, out
 
@@ -417,7 +421,7 @@ def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**12, grad_max=(50., 50.), 
 
 @partial(adaptive_filter, trainable=True)
 def cpane_ekf(alpha=0.99,
-              beta=0.8,
+              beta=0.6,
               Q=1e-4 + 0j,
               R=1e-2 + 0j,
               akf=True,
@@ -433,22 +437,21 @@ def cpane_ekf(alpha=0.99,
     const = jnp.asarray(const)
 
     def init(p0=0j):
-        state0 = (p0, 1j, 0j, Q, R, beta)
+        state0 = (p0, 1j, 0j, Q, R)
         return state0
 
     def update(state, inp):
-        Psi_c, P_c, Psi_a, Q, R, ipowbeta = state
+        Psi_c, P_c, Psi_a, Q, R = state
         y, x, train = inp
 
         Psi_p = Psi_c
         P_p = P_c + Q
-
-        Psi_a = beta * Psi_a + (1 - beta) * Psi_c # exponential moving average
-        Psi_ahat = Psi_a / (1 - ipowbeta) # bias correction
+        # exponential moving average
+        Psi_a = beta * Psi_a + (1 - beta) * Psi_c
 
         d = jnp.where(train,
                       x,
-                      const[jnp.argmin(jnp.abs(const - y * jnp.exp(-1j * Psi_ahat)))])
+                      const[jnp.argmin(jnp.abs(const - y * jnp.exp(-1j * Psi_a)))])
 
         H = 1j * d * jnp.exp(1j * Psi_p)
         K = P_p * H.conj() / (H * P_p * H.conj() + R)
@@ -461,9 +464,8 @@ def cpane_ekf(alpha=0.99,
         e = y - d * jnp.exp(1j * Psi_c)
         Q = alpha * Q + (1. - alpha) * K * v * v.conj() * K.conj() if akf else Q
         R = alpha * R + (1 - alpha) * (e * e.conj() + H * P_p * H.conj()) if akf else R
-        ipowbeta *= beta
 
-        state = (Psi_c, P_c, Psi_a, Q, R, ipowbeta)
+        state = (Psi_c, P_c, Psi_a, Q, R)
 
         return state, out
 
