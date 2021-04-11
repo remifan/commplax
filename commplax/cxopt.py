@@ -145,159 +145,6 @@ def sgd(step_size):
   return Optimizer(init, update, get_params)
 
 
-# @optimizer
-# def momentum(step_size: Schedule, mass: float):
-#   """Construct optimizer triple for SGD with momentum.
-
-#   Args:
-#     step_size: positive scalar, or a callable representing a step size schedule
-#       that maps the iteration index to positive scalar.
-#     mass: positive scalar representing the momentum coefficient.
-
-#   Returns:
-#     An (init_fun, update_fun, get_params) triple.
-#   """
-#   step_size = make_schedule(step_size)
-#   def init(x0):
-#     v0 = jnp.zeros_like(x0)
-#     return x0, v0
-#   def update(i, g, state):
-#     x, velocity = state
-#     velocity = mass * velocity + jnp.conj(g)
-#     x = x - step_size(i) * velocity
-#     return x, velocity
-#   def get_params(state):
-#     x, _ = state
-#     return x
-#   return init, update, get_params
-
-
-# @optimizer
-# def nesterov(step_size: Schedule, mass: float):
-#   """Construct optimizer triple for SGD with Nesterov momentum.
-
-#   Args:
-#     step_size: positive scalar, or a callable representing a step size schedule
-#       that maps the iteration index to positive scalar.
-#     mass: positive scalar representing the momentum coefficient.
-
-#   Returns:
-#     An (init_fun, update_fun, get_params) triple.
-#   """
-#   step_size = make_schedule(step_size)
-#   def init(x0):
-#     v0 = jnp.zeros_like(x0)
-#     return x0, v0
-#   def update(i, g, state):
-#     x, velocity = state
-#     velocity = mass * velocity + g
-#     x = x - step_size(i) * (mass * velocity + g)
-#     return x, velocity
-#   def get_params(state):
-#     x, _ = state
-#     return x
-#   return init, update, get_params
-
-
-# @optimizer
-# def adagrad(step_size, momentum=0.9):
-#   """Construct optimizer triple for Adagrad.
-
-#   Adaptive Subgradient Methods for Online Learning and Stochastic Optimization:
-#   http://www.jmlr.org/papers/volume12/duchi11a/duchi11a.pdf
-
-#   Args:
-#     step_size: positive scalar, or a callable representing a step size schedule
-#       that maps the iteration index to positive scalar.
-#     momentum: optional, a positive scalar value for momentum
-
-#   Returns:
-#     An (init_fun, update_fun, get_params) triple.
-#   """
-#   step_size = make_schedule(step_size)
-
-#   def init(x0):
-#     g_sq = jnp.zeros_like(x0)
-#     m = jnp.zeros_like(x0)
-#     return x0, g_sq, m
-
-#   def update(i, g, state):
-#     x, g_sq, m = state
-#     g_sq += jnp.square(g)
-#     g_sq_inv_sqrt = jnp.where(g_sq > 0, 1. / jnp.sqrt(g_sq), 0.0)
-#     m = (1. - momentum) * (g * g_sq_inv_sqrt) + momentum * m
-#     x = x - step_size(i) * m
-#     return x, g_sq, m
-
-#   def get_params(state):
-#     x, _, _ = state
-#     return x
-
-#   return init, update, get_params
-
-
-# @optimizer
-# def rmsprop(step_size, gamma=0.9, eps=1e-8):
-#   """Construct optimizer triple for RMSProp.
-
-#   Args:
-#     step_size: positive scalar, or a callable representing a step size schedule
-#       that maps the iteration index to positive scalar.
-#       gamma: Decay parameter.
-#       eps: Epsilon parameter.
-
-#   Returns:
-#     An (init_fun, update_fun, get_params) triple.
-#   """
-#   step_size = make_schedule(step_size)
-#   def init(x0):
-#     avg_sq_grad = jnp.zeros_like(x0)
-#     return x0, avg_sq_grad
-#   def update(i, g, state):
-#     x, avg_sq_grad = state
-#     avg_sq_grad = avg_sq_grad * gamma + jnp.square(g) * (1. - gamma)
-#     x = x - step_size(i) * g / jnp.sqrt(avg_sq_grad + eps)
-#     return x, avg_sq_grad
-#   def get_params(state):
-#     x, _ = state
-#     return x
-#   return init, update, get_params
-
-
-# @optimizer
-# def rmsprop_momentum(step_size, gamma=0.9, eps=1e-8, momentum=0.9):
-#   """Construct optimizer triple for RMSProp with momentum.
-
-#   This optimizer is separate from the rmsprop optimizer because it needs to
-#   keep track of additional parameters.
-
-#   Args:
-#     step_size: positive scalar, or a callable representing a step size schedule
-#       that maps the iteration index to positive scalar.
-#     gamma: Decay parameter.
-#     eps: Epsilon parameter.
-#     momentum: Momentum parameter.
-
-#   Returns:
-#     An (init_fun, update_fun, get_params) triple.
-#   """
-#   step_size = make_schedule(step_size)
-#   def init(x0):
-#     avg_sq_grad = jnp.zeros_like(x0)
-#     mom = jnp.zeros_like(x0)
-#     return x0, avg_sq_grad, mom
-#   def update(i, g, state):
-#     x, avg_sq_grad, mom = state
-#     avg_sq_grad = avg_sq_grad * gamma + jnp.square(g) * (1. - gamma)
-#     mom = momentum * mom + step_size(i) * g / jnp.sqrt(avg_sq_grad + eps)
-#     x = x - mom
-#     return x, avg_sq_grad, mom
-#   def get_params(state):
-#     x, _, _ = state
-#     return x
-#   return init, update, get_params
-
-
 @optimizer
 def adam(step_size, b1=0.9, b2=0.999, eps=1e-8):
   """Construct optimizer triple for Adam.
@@ -335,8 +182,51 @@ def adam(step_size, b1=0.9, b2=0.999, eps=1e-8):
 
 
 @optimizer
-def adabelief(step_size, b1=0.9, b2=0.999, eps=1e-8):
-  """Construct optimizer triple for Adam.
+def adabound(lr, final_lr, b1=0.9, b2=0.999, gamma=1e-3, eps=1e-8):
+  """Construct optimizer triple for AdaBound.
+
+  Args:
+    step_size: positive scalar, or a callable representing a step size schedule
+      that maps the iteration index to positive scalar.
+    b1: optional, a positive scalar value for beta_1, the exponential decay rate
+      for the first moment estimates (default 0.9).
+    b2: optional, a positive scalar value for beta_2, the exponential decay rate
+      for the second moment estimates (default 0.999).
+    gamma: convergence speed of the bound functions (default: 1e-3)
+    eps: optional, a positive scalar value for epsilon, a small constant for
+      numerical stability (default 1e-8).
+
+  Returns:
+    An (init_fun, update_fun, get_params) triple.
+  """
+  base_lr = lr
+  sche_lr = make_schedule(lr)
+  def init(x0):
+    m0 = jnp.zeros_like(x0)
+    v0 = jnp.zeros_like(x0)
+    return x0, m0, v0
+  def update(i, g, state):
+    x, m, v = state
+    m = (1 - b1) * g.conj() + b1 * m  # First  moment estimate.
+    v = (1 - b2) * (g * g.conj()) + b2 * v  # Second moment estimate.
+    lri = sche_lr(i)
+    lr = lri * jnp.sqrt(1 - b2**i) / (1 - b1**i) # bias correction
+    # scale final_lr with factor by lr_scheduler
+    flr = final_lr * lri / base_lr
+    lb = flr * (1. - 1. / (gamma**i + 1.)) # lower bound
+    ub = flr * (1. + 1. / (gamma**i)) # upper bound
+    lr_bd = jnp.clip(lr / (jnp.sqrt(v) + eps), lb, ub)
+    x = x - lr_bd * m
+    return x, m, v
+  def get_params(state):
+    x, _, _ = state
+    return x
+  return init, update, get_params
+
+
+@optimizer
+def adabelief(step_size, b1=0.9, b2=0.999, eps=1e-8, rectify=True, sma_threshold=5.):
+  """Construct optimizer triple for AdaBelief
 
   Args:
     step_size: positive scalar, or a callable representing a step size schedule
@@ -347,6 +237,8 @@ def adabelief(step_size, b1=0.9, b2=0.999, eps=1e-8):
       for the second moment estimates (default 0.999).
     eps: optional, a positive scalar value for epsilon, a small constant for
       numerical stability (default 1e-8).
+    rectify: optional, boolean. Whether to enable rectification as in RectifiedAdam
+    sma_threshold: optional. A float value. The threshold for simple mean average.
 
   Returns:
     An (init_fun, update_fun, get_params) triple.
@@ -358,100 +250,24 @@ def adabelief(step_size, b1=0.9, b2=0.999, eps=1e-8):
     return x0, m0, s0
   def update(i, g, state):
     x, m, s = state
-    m = (1 - b1) * g + b1 * m  # First  moment estimate.
-    s = (1 - b2) * ((g - m) * (g - m).conj()) + b2 * s + eps  # Second moment estimate.
-    # mhat = m / (1 - b1 ** (i + 1))  # Bias correction.
-    # shat = s / (1 - b2 ** (i + 1))
-    mhat = m / (1 - jnp.asarray(b1, m.dtype) ** (i + 1))  # Bias correction.
-    shat = s / (1 - jnp.asarray(b2, m.dtype) ** (i + 1))
-    x = x - step_size(i) * mhat.conj() / (jnp.sqrt(shat) + eps)
+    b1pow = b1**(i + 1)
+    b2pow = b2**(i + 1)
+    sma_inf = 2. / (1. - b2) - 1.
+    sma = sma_inf - 2. * i * b2pow / (1. - b2pow)
+    m = (1. - b1) * g.conj() + b1 * m  # First  moment estimate.
+    s = (1. - b2) * ((g.conj() - m) * (g.conj() - m).conj()) + b2 * s + eps  # Second moment estimate.
+    r = jnp.sqrt((sma - 4.) / (sma_inf - 4.) * (sma - 2.) / (sma_inf - 2.) * sma_inf / sma)
+    mhat = m / (1. - b1pow)  # Bias correction.
+    shat = s / (1. - b2pow)
+    var = mhat / (jnp.sqrt(shat) + eps)
+    if rectify:
+        var = jnp.where(sma >= sma_threshold, r * var, mhat)
+    x = x - step_size(i) * var
     return x, m, s
   def get_params(state):
     x, _, _ = state
     return x
   return init, update, get_params
-
-
-# @optimizer
-# def adamax(step_size, b1=0.9, b2=0.999, eps=1e-8):
-#   """Construct optimizer triple for AdaMax (a variant of Adam based on infinity norm).
-
-#   Args:
-#     step_size: positive scalar, or a callable representing a step size schedule
-#       that maps the iteration index to positive scalar.
-#     b1: optional, a positive scalar value for beta_1, the exponential decay rate
-#       for the first moment estimates (default 0.9).
-#     b2: optional, a positive scalar value for beta_2, the exponential decay rate
-#       for the second moment estimates (default 0.999).
-#     eps: optional, a positive scalar value for epsilon, a small constant for
-#       numerical stability (default 1e-8).
-
-#   Returns:
-#     An (init_fun, update_fun, get_params) triple.
-#   """
-#   step_size = make_schedule(step_size)
-#   def init(x0):
-#     m0 = jnp.zeros_like(x0)
-#     u0 = jnp.zeros_like(x0)
-#     return x0, m0, u0
-#   def update(i, g, state):
-#     x, m, u = state
-#     m = (1 - b1) * g + b1 * m  # First  moment estimate.
-#     u = jnp.maximum(b2 * u, jnp.abs(g))  # Update exponentially weighted infinity norm.
-#     x = (x - (step_size(i) / (1 - jnp.asarray(b1, m.dtype) ** (i + 1))) * m
-#          / (u + eps))
-#     return x, m, u
-#   def get_params(state):
-#     x, _, _ = state
-#     return x
-#   return init, update, get_params
-
-
-# @optimizer
-# def sm3(step_size, momentum=0.9):
-#   """Construct optimizer triple for SM3.
-
-#   Memory-Efficient Adaptive Optimization for Large-Scale Learning.
-#   https://arxiv.org/abs/1901.11150
-
-#   Args:
-#     step_size: positive scalar, or a callable representing a step size schedule
-#       that maps the iteration index to positive scalar.
-#     momentum: optional, a positive scalar value for momentum
-
-#   Returns:
-#     An (init_fun, update_fun, get_params) triple.
-#   """
-#   step_size = make_schedule(step_size)
-
-#   def splice(seq, i, x):
-#     lst = list(seq)
-#     lst[i:i+1] = x
-#     return lst
-
-#   def broadcast_into(ndim, x, axis):
-#     idx = splice([None] * ndim, axis, [slice(None)])
-#     return x[tuple(idx)]
-
-#   def init(x0):
-#     vs = [jnp.zeros(sz, dtype=x0.dtype) for sz in x0.shape]
-#     return x0, jnp.zeros_like(x0), vs
-
-#   def update(i, g, state):
-#     x, m, vs = state
-#     vs = [broadcast_into(g.ndim, v, i) for i, v in enumerate(vs)]
-#     accum = functools.reduce(jnp.minimum, vs) + jnp.square(g)
-#     accum_inv_sqrt = jnp.where(accum > 0, 1. / jnp.sqrt(accum), 0)
-#     m = (1. - momentum) * (g * accum_inv_sqrt) + momentum * m
-#     x = x - step_size(i) * m
-#     vs = [accum.max(splice(range(x.ndim), j, [])) for j in range(x.ndim)]
-#     return x, m, vs
-
-#   def get_params(state):
-#     x, _, _ = state
-#     return x
-
-#   return init, update, get_params
 
 
 ### learning rate schedules
