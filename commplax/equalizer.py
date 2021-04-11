@@ -29,7 +29,7 @@ def cdcomp(signal, sr, CD, fc=193.4e12, polmux=True):
     return tddbp(signal, sr, 0., dist, 1, mintaps, xi=0., D=D, polmux=polmux)
 
 
-def qammimo(signal, sps=2, taps=19, cma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
+def modulusmimo(signal, sps=2, taps=19, cma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
     '''
     Adaptive MIMO equalizer for M-QAM signal
     '''
@@ -44,12 +44,12 @@ def qammimo(signal, sps=2, taps=19, cma_samples=20000, modformat='16QAM', const=
     R2 = np.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
     Rs = np.array(np.unique(np.abs(const)))
 
-    return jit(_qammimo,
+    return jit(_modulusmimo,
                static_argnums=(3, 4, 5,),
                backend=backend)(y, R2, Rs, sps, taps, cma_samples)
 
 
-def _qammimo(y, R2, Rs, sps, taps, cma_samples):
+def _modulusmimo(y, R2, Rs, sps, taps, cma_samples):
     # prepare adaptive filters
 
     y = jnp.asarray(y)
@@ -64,14 +64,58 @@ def _qammimo(y, R2, Rs, sps, taps, cma_samples):
     # get initial weights
     s0 = cma_init(taps=taps, dtype=y.dtype)
     # initialize MIMO via MU-CMA to avoid singularity
-    (w0, *_,), (loss1, ws1) = af.iterate(cma_update, s0, yf[:cma_samples])
+    (w0, *_,), (ws1, loss1) = af.iterate(cma_update, s0, yf[:cma_samples])
     # switch to RDE
-    _, (loss2, ws2) = af.iterate(rde_update, w0, yf[cma_samples:])
+    _, (ws2, loss2) = af.iterate(rde_update, w0, yf[cma_samples:])
     loss = jnp.concatenate([loss1, loss2], axis=0)
     ws = jnp.concatenate([ws1, ws2], axis=0)
     x_hat = rde_map(ws, yf)
 
     return x_hat, loss, ws
+
+
+def lmsmimo(signal, truth, sps=2, taps=31,
+            lrw=1/2**6, lrf=1/2**7, lrs=0., lrb=1/2**12, beta=0.9,
+            backend='cpu'):
+    return jit(_lmsmimo,
+               static_argnums=(2, 3),
+               backend=backend)(signal, truth, sps, taps, lrw, lrf, lrs, lrb, beta)
+
+
+def _lmsmimo(signal, truth, sps, taps, mu_w, mu_f, mu_s, mu_b, beta):
+    y = jnp.asarray(signal)
+    x = jnp.asarray(truth)
+    lms_init, lms_update, lms_map = af.ddlms(mu_w=mu_w,
+                                             mu_f=mu_f,
+                                             mu_s=mu_s,
+                                             mu_b=mu_b,
+                                             beta=beta,
+                                             lockgain=False)
+    yf = af.frame(y, taps, sps)
+    s0 = lms_init(taps, mimoinit='centralspike')
+    _, (ss, (loss, *_)) = af.iterate(lms_update, s0, yf, x)
+    xhat = lms_map(ss, yf)
+    return xhat, loss
+
+
+def rdemimo(signal, truth, lr=1/2**13, sps=2, taps=31, backend='cpu',
+            const=comm.const("16QAM", norm=True)):
+    Rs = np.array(np.unique(np.abs(const)))
+    return jit(_rdemimo,
+               static_argnums=(4, 5),
+               backend=backend)(signal, truth, lr, Rs, sps, taps)
+
+
+def _rdemimo(signal, truth, lr, Rs, sps, taps):
+    y = jnp.asarray(signal)
+    x = jnp.asarray(truth)
+    dims = y.shape[-1]
+    rde_init, rde_update, rde_map = af.rde(lr=lr, Rs=Rs, dims=dims)
+    yf = af.frame(y, taps, sps)
+    s0 = rde_init(taps=taps, dtype=y.dtype)
+    _, (ss, loss) = af.iterate(rde_update, s0, yf, x)
+    xhat = rde_map(ss, yf)
+    return xhat, loss
 
 
 def qamfoe(x, local=False, fitkind=None, lfoe_fs=16384, lfoe_st=5000, backend='cpu'):
@@ -95,20 +139,21 @@ def _qamfoe(x, local, fitkind, lfoe_fs, lfoe_st):
     return x, fo
 
 
-def qamcpr(signal, modformat='16QAM', const=None, backend='cpu'):
-    x = device_put(signal)
+def ekfcpr(signal, truth=None, modformat='16QAM', const=None, backend='cpu'):
+    y = jnp.asarray(signal)
+    x = jnp.asarray(truth)
     if const is None:
         const=comm.const(modformat, norm=True)
     const = jnp.asarray(const)
-    return jit(_qamcpr, backend=backend)(x, const)
+    return jit(_ekfcpr, backend=backend)(y, x, const)
 
 
-def _qamcpr(x, const):
-    dims = x.shape[-1]
-    cpr_init, cpr_update, cpr_map = af.array(af.cpane_ekf, dims)(beta=0.7, const=const)
+def _ekfcpr(y, x, const):
+    dims = y.shape[-1]
+    cpr_init, cpr_update, cpr_map = af.array(af.cpane_ekf, dims)(beta=0.6, const=const)
     cpr_state = cpr_init()
-    _, (phi, _) = af.iterate(cpr_update, cpr_state, x)
-    x = cpr_map(phi, x)
-    return x, phi
+    _, (phi, _) = af.iterate(cpr_update, cpr_state, y, x)
+    xhat = cpr_map(phi, y)
+    return xhat, phi
 
 
