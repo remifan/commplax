@@ -511,6 +511,15 @@ def corr_local(y, x, frame_size=10000, L=None):
     return qot_local_ip
 
 
+def snrstat(xhat, x, frame_size=10000, L=None):
+    snr_local = qamqot_local(xhat, x, frame_size, L)['SNR'][:, :2]
+    sl_mean = np.mean(snr_local, axis=0)
+    sl_std = np.std(snr_local, axis=0)
+    sl_max = np.max(snr_local, axis=0)
+    sl_min = np.min(snr_local, axis=0)
+    return np.stack((sl_mean, sl_std, sl_mean - sl_min, sl_max - sl_mean))
+
+
 def firfreqz(h, sr=1, N=8192, t0=None):
     if h.ndim == 1:
         h = h[None,:]
