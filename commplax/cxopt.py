@@ -182,7 +182,7 @@ def adam(step_size, b1=0.9, b2=0.999, eps=1e-8):
 
 
 @optimizer
-def adabound(lr, final_lr, b1=0.9, b2=0.999, gamma=1e-3, eps=1e-8):
+def adabound(lr=1e-3, final_lr=1e-3, b1=0.9, b2=0.999, gamma=1e-3, eps=1e-8):
   """Construct optimizer triple for AdaBound.
 
   Args:
@@ -199,22 +199,24 @@ def adabound(lr, final_lr, b1=0.9, b2=0.999, gamma=1e-3, eps=1e-8):
   Returns:
     An (init_fun, update_fun, get_params) triple.
   """
-  base_lr = lr
   sche_lr = make_schedule(lr)
+  base_lr = sche_lr(0)
   def init(x0):
     m0 = jnp.zeros_like(x0)
     v0 = jnp.zeros_like(x0)
     return x0, m0, v0
   def update(i, g, state):
     x, m, v = state
+    b1pow = jnp.asarray(b1, m.dtype) ** (i + 1)
+    b2pow = jnp.asarray(b2, m.dtype) ** (i + 1)
     m = (1 - b1) * g.conj() + b1 * m  # First  moment estimate.
     v = (1 - b2) * (g * g.conj()) + b2 * v  # Second moment estimate.
     lri = sche_lr(i)
-    lr = lri * jnp.sqrt(1 - b2**i) / (1 - b1**i) # bias correction
-    # scale final_lr with factor by lr_scheduler
+    lr = lri * (1 - b2pow) / (1 - b1pow) # bias correction
+    # scale final_lr with lr_scheduler
     flr = final_lr * lri / base_lr
-    lb = flr * (1. - 1. / (gamma**i + 1.)) # lower bound
-    ub = flr * (1. + 1. / (gamma**i)) # upper bound
+    lb = flr * (1 - 1 / (gamma * (i + 1) + 1)) # lower bound
+    ub = flr * (1 + 1 / (gamma * (i + 1))) # upper bound
     lr_bd = jnp.clip(lr / (jnp.sqrt(v) + eps), lb, ub)
     x = x - lr_bd * m
     return x, m, v
@@ -250,8 +252,8 @@ def adabelief(step_size, b1=0.9, b2=0.999, eps=1e-8, rectify=True, sma_threshold
     return x0, m0, s0
   def update(i, g, state):
     x, m, s = state
-    b1pow = b1**(i + 1)
-    b2pow = b2**(i + 1)
+    b1pow = jnp.asarray(b1, m.dtype) ** (i + 1)
+    b2pow = jnp.asarray(b2, m.dtype) ** (i + 1)
     sma_inf = 2. / (1. - b2) - 1.
     sma = sma_inf - 2. * i * b2pow / (1. - b2pow)
     m = (1. - b1) * g.conj() + b1 * m  # First  moment estimate.

@@ -9,6 +9,7 @@ def gpuexists():
     gpus = jax.devices('gpu')
     return len(gpus) != 0
 
+
 def gpufirstbackend():
     '''
     NOTE: `backend` api is experimental feature,

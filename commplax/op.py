@@ -1,7 +1,5 @@
 import numpy as np
-from commplax import xop
 from scipy import signal
-from functools import partial
 
 
 def dbp_2d(y, h, phi):
@@ -18,23 +16,6 @@ def dbp_2d(y, h, phi):
 def resample(x, p, q, axis=0):
     gcd = np.gcd(p, q)
     return signal.resample_poly(x, p//gcd, q//gcd, axis=axis)
-
-
-def getpower(x, real=False):
-    ''' get signal power '''
-    if real:
-        return np.mean(x.real**2, axis=0), np.mean(x.imag**2, axis=0)
-    else:
-        return np.mean(abs(x)**2, axis=0)
-
-
-def normpower(x, real=False):
-    ''' normalize signal power '''
-    if real:
-        pr, pi = getpower(x, real=True)
-        return x.real / np.sqrt(pr) + 1j * x.imag / np.sqrt(pi)
-    else:
-        return x / np.sqrt(getpower(x))
 
 
 def frame_prepare(x, flen, fstep, pad_end=False, pad_constants=0):
