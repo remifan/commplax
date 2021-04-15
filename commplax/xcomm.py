@@ -86,22 +86,32 @@ def dbp_params(
     return H, h_casual, phi
 
 
-def dbp_timedomain(y, h, c, mode='SAME'):
+def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True):
 
     y = device_put(y)
     h = device_put(h)
     c = device_put(c)
 
-    steps = c.shape[0]
-
+    md = 'SAME' if homosteps else mode
     #D = jit(vmap(lambda y,h: xop.conv1d_fft_oa(y, h, mode=mode), in_axes=1, out_axes=1))
-    D = jit(vmap(lambda y,h: xop.fftconvolve(y, h, mode=mode), in_axes=1, out_axes=1))
+    D = jit(vmap(lambda y, h: xop.fftconvolve(y, h, mode=md), in_axes=1, out_axes=1))
     # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # often too slow for long h
-    N = jit(lambda y,c: y * jnp.exp(1j * (abs(y)**2 @ c)))
+    N = jit(lambda y, c: y * jnp.exp(1j * (abs(y)**2 @ c)))
 
-    for i in range(steps):
-        y = D(y, h[i])
-        y = N(y, c[i])
+    T = h.shape[1] - 1
+    K = h.shape[0]
+
+    if homosteps and scansteps: # homogeneous steps is faster on first jitted run
+    # scan not working on 'SAME' mode due to carry shape change
+        y = xop.scan(lambda x, p: (N(D(x, p[0]), p[1]), 0.), y, (h, c))[0]
+    else:
+        steps = c.shape[0]
+        for i in range(steps):
+            y = D(y, h[i])
+            y = N(y, c[i])
+
+    if homosteps and mode.lower() == 'valid':
+       y = y[K * T // 2: -K * T // 2]
 
     return y
 

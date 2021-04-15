@@ -7,6 +7,7 @@ from commplax import op, xop, comm, xcomm, cxopt, adaptive_filter as af, equaliz
 
 
 DDLMSParams = namedtuple('LMSMIMOParams', ['taps', 'lr_w', 'lr_f', 'lockgain'], defaults=(31, 1/2**7, 1/2**7, False))
+DBPParams = namedtuple('DBPParams', ['h', 'c'])
 
 
 def matchedfilter(y, h, mode='same'):
@@ -19,7 +20,10 @@ def onespike(taps, dims=2):
     return jnp.array(mf)
 
 
-def ddlms(a, mf=onespike(129), lmsparams=(DDLMSParams(taps=11, lr_w=1/2**7, lr_f=1/2**7, lockgain=False))):
+def ddlms(a,
+          mf=onespike(129),
+          dbpparams=None,
+          lmsparams=(DDLMSParams(taps=11, lr_w=1/2**7, lr_f=1/2**7, lockgain=False))):
     lmsparams = lmsparams
     mf = mf
     sps = 2
@@ -30,7 +34,10 @@ def ddlms(a, mf=onespike(129), lmsparams=(DDLMSParams(taps=11, lr_w=1/2**7, lr_f
 
     mftaps = mf.shape[0]
     mimotaps = lmsparams.taps
-    cdctaps = eq.cdctaps(a['samplerate'], a['cd'])
+    if dbpparams is not None:
+        cdctaps = dbpparams.h.shape[0] * (dbpparams.h.shape[1] - 1) + 1
+    else:
+        cdctaps = eq.cdctaps(a['samplerate'], a['cd'])
     cdcpads = af.filterzerodelaypads(cdctaps)
     mfpads = af.filterzerodelaypads(mftaps)
     mimopads = af.filterzerodelaypads(mimotaps, stride=sps)
@@ -40,12 +47,12 @@ def ddlms(a, mf=onespike(129), lmsparams=(DDLMSParams(taps=11, lr_w=1/2**7, lr_f
     mimostat = lms_init(mimotaps, mimoinit='centralspike')
     dspdelay = xbuf.shape[0]
 
-    Params = namedtuple('Params', ['mf'])
+    Params = namedtuple('Params', ['mf', 'dbp'])
     InpBuf = namedtuple('InpBuf', ['ybuf', 'xbuf', 'fomulbuf'])
     AFStat = namedtuple('AFStat', ['mimo'])
     AFVals = namedtuple('AFVals', ['mimo'])
 
-    params0 = Params(mf)
+    params0 = Params(mf, dbpparams)
     inpbuf0 = InpBuf(ybuf, xbuf, fobuf)
     afstate0 = AFStat(mimostat)
 
@@ -68,10 +75,13 @@ def ddlms(a, mf=onespike(129), lmsparams=(DDLMSParams(taps=11, lr_w=1/2**7, lr_f
         inp, inpbuf = updinpbuf(inp, inpbuf)
 
         y, x, fomul = inp
-        mf, = params
+        mf, dbp = params
         mimostat, = afstate
 
-        z = eq.cdcomp(y, a['samplerate'], a['cd'], mode='valid')
+        if dbpparams is not None:
+            z = xcomm.dbp_timedomain(y / jnp.sqrt(2), dbp.h, dbp.c, mode='valid', homosteps=True, scansteps=True) * jnp.sqrt(2)
+        else:
+            z = eq.cdcomp(y, a['samplerate'], a['cd'], mode='valid')
         z *= fomul
         z = matchedfilter(z, mf, mode='valid')
         zf = xop.frame(z, lmsparams.taps, sps)
@@ -88,10 +98,13 @@ def ddlms(a, mf=onespike(129), lmsparams=(DDLMSParams(taps=11, lr_w=1/2**7, lr_f
         inp, inpbuf = updinpbuf(inp, inpbuf)
 
         y, _, fomul = inp
-        mf, = params
+        mf, dbp = params
         mimovals, = afvals
 
-        z = eq.cdcomp(y, a['samplerate'], a['cd'], mode='valid')
+        if dbpparams is not None:
+            z = xcomm.dbp_timedomain(y / jnp.sqrt(2), dbp.h, dbp.c, mode='valid', homosteps=True, scansteps=True) * jnp.sqrt(2)
+        else:
+            z = eq.cdcomp(y, a['samplerate'], a['cd'], mode='valid')
         z *= fomul
         z = matchedfilter(z, mf, mode='valid')
         zf = xop.frame(z, lmsparams.taps, sps)
