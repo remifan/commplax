@@ -12,11 +12,10 @@ def tddbp(signal, sr, lp, dist, spans, taps, xi=0.6, D=16.5E-6, polmux=True, mod
 
 def _tddbp(x, sr, lp, dist, spans, taps, xi, D, polmux, mode):
     x = xcomm.normpower(x)
-    powscale = np.sqrt(2) if polmux else 1.
     _, param_D, param_N = xcomm.dbp_params(sr, dist/spans, spans, taps, fiber_dispersion=D, polmux=polmux)
-    return xcomm.dbp_timedomain(x / powscale, param_D,
+    return xcomm.dbp_timedomain(x, param_D,
                                 xi * 10.**(lp / 10 - 3) * param_N,
-                                mode=mode) * powscale
+                                mode=mode)
 
 
 def cdctaps(sr, CD, fc=193.4e12):

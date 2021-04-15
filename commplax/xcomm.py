@@ -92,6 +92,11 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True):
     h = device_put(h)
     c = device_put(c)
 
+    dims = y.shape[-1]
+
+    optpowscale = jnp.sqrt(dims)
+    y /= optpowscale
+
     md = 'SAME' if homosteps else mode
     #D = jit(vmap(lambda y,h: xop.conv1d_fft_oa(y, h, mode=mode), in_axes=1, out_axes=1))
     D = jit(vmap(lambda y, h: xop.fftconvolve(y, h, mode=md), in_axes=1, out_axes=1))
@@ -113,7 +118,7 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True):
     if homosteps and mode.lower() == 'valid':
        y = y[K * T // 2: -K * T // 2]
 
-    return y
+    return y * optpowscale
 
 
 def dbp_direct(y, H, c):
