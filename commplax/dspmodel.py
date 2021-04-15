@@ -6,6 +6,7 @@ from collections import namedtuple
 from commplax import op, xop, comm, xcomm, cxopt, adaptive_filter as af, equalizer as eq
 
 
+DSPModel = namedtuple('DSPModel', ['params', 'inpbuf', 'afstat', 'delay', 'iter', 'model', 'value_and_grad'])
 DDLMSParams = namedtuple('LMSMIMOParams', ['taps', 'lr_w', 'lr_f', 'lockgain'], defaults=(31, 1/2**7, 1/2**7, False))
 DBPParams = namedtuple('DBPParams', ['h', 'c'])
 
@@ -20,7 +21,7 @@ def onespike(taps, dims=2):
     return jnp.array(mf)
 
 
-def ddlms(a,
+def dbplms(a,
           mf=onespike(129),
           dbpparams=None,
           lmsparams=(DDLMSParams(taps=11, lr_w=1/2**7, lr_f=1/2**7, lockgain=False))):
@@ -35,7 +36,7 @@ def ddlms(a,
     mftaps = mf.shape[0]
     mimotaps = lmsparams.taps
     if dbpparams is not None:
-        cdctaps = dbpparams.h.shape[0] * (dbpparams.h.shape[1] - 1) + 1
+        cdctaps = dbpparams.h.shape[0] * (dbpparams.h.shape[1] - 1) + 1 # equivalent taps
     else:
         cdctaps = eq.cdctaps(a['samplerate'], a['cd'])
     cdcpads = af.filterzerodelaypads(cdctaps)
@@ -79,7 +80,7 @@ def ddlms(a,
         mimostat, = afstate
 
         if dbpparams is not None:
-            z = xcomm.dbp_timedomain(y / jnp.sqrt(2), dbp.h, dbp.c, mode='valid', homosteps=True, scansteps=True) * jnp.sqrt(2)
+            z = xcomm.dbp_timedomain(y, dbp.h, dbp.c, mode='valid', homosteps=True, scansteps=True)
         else:
             z = eq.cdcomp(y, a['samplerate'], a['cd'], mode='valid')
         z *= fomul
@@ -102,7 +103,7 @@ def ddlms(a,
         mimovals, = afvals
 
         if dbpparams is not None:
-            z = xcomm.dbp_timedomain(y / jnp.sqrt(2), dbp.h, dbp.c, mode='valid', homosteps=True, scansteps=True) * jnp.sqrt(2)
+            z = xcomm.dbp_timedomain(y, dbp.h, dbp.c, mode='valid', homosteps=True, scansteps=True)
         else:
             z = eq.cdcomp(y, a['samplerate'], a['cd'], mode='valid')
         z *= fomul
@@ -112,6 +113,15 @@ def ddlms(a,
         z *= xcomm.qamscale(a['modformat'])
         return z, inpbuf
 
-    return iterate, model, dspdelay, params0, inpbuf0, afstate0
+    def lossfn(v, z, inp, params, inpbuf, afvals):
+        zhat, _ = model(inp, params._replace(**v._asdict()), inpbuf, afvals)
+        return jnp.mean(jnp.abs(zhat - z)**2)
+
+    @jit
+    def value_and_grad(v, z, inp, params, inpbuf, afvals):
+        loss, grads = jax.value_and_grad(lossfn)(v, z, inp, params, inpbuf, afvals)
+        return loss, grads
+
+    return DSPModel(params0, inpbuf0, afstate0, dspdelay, iterate, model, value_and_grad)
 
 
