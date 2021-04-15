@@ -1,8 +1,12 @@
 import jax
 
+
+def getdev(x):
+    return x.device_buffer.device()
+
 def devputlike(x, y):
     '''put x into the same device with y'''
-    return jax.device_put(x, y.device_buffer.device())
+    return jax.device_put(x, getdev(y))
 
 
 def gpuexists():

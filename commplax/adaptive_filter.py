@@ -3,6 +3,7 @@ import functools
 import numpy as np
 from typing import Any, Callable, NamedTuple, Tuple, Union
 from functools import partial
+from collections import namedtuple
 from jax import jit, numpy as jnp
 from commplax import comm, xop
 from jax.tree_util import tree_flatten, tree_unflatten, register_pytree_node
@@ -18,9 +19,6 @@ Step = int
 InitFn = Callable
 UpdateFn = Callable[[AFState, Signal], AFState]
 StaticMapFn = Callable[[Any, Any], Any]
-
-cpus = jax.devices("cpu")
-gpus = jax.devices("gpu")
 
 
 class AdaptiveFilter(NamedTuple):
@@ -143,12 +141,16 @@ def c2r(c):
     return r
 
 
-def mimozerodelaypads(taps, sps=2, rtap=None):
+def filterzerodelaypads(taps, stride=1, rtap=None):
     if rtap is None:
-        rtap = (taps + 1) // sps - 1
-    mimo_delay = int(np.ceil((rtap + 1) / sps) - 1)
-    pads = np.array([[mimo_delay * sps, taps - sps * (mimo_delay + 1)], [0,0]])
+        rtap = (taps + 1) // 2 - 1
+    filterdelay = int(np.ceil((rtap + 1) / stride) - 1)
+    pads = np.array([[filterdelay * stride, taps - stride * (filterdelay + 1)], [0,0]])
     return pads
+
+
+def mimozerodelaypads(taps, sps=2, rtap=None):
+    return filterzerodelaypads(taps, sps, rtap)
 
 
 def frame(y, taps, sps, rtap=None):
@@ -190,7 +192,7 @@ def make_train_argin(ys, truth=None, train=None, sps=1):
     return jax.device_put(xs)
 
 
-def iterate(update, state, signal, truth=None, train=None, device=cpus[0]):
+def iterate(update, state, signal, truth=None, train=None, device=None):
     xs = make_train_argin(signal, truth, train)
     return xop.scan(update, state, xs, jit_device=device)
 
@@ -343,7 +345,7 @@ def rde(dims=2, lr=2**-15, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))
 
 
 @partial(adaptive_filter, trainable=True)
-def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**11, grad_max=(50., 50.), eps=1e-8,
+def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), eps=1e-8,
           beta=0., const=comm.const("16QAM", norm=True), lockgain=False):
     '''
     Enhancements
@@ -402,10 +404,10 @@ def ddlms(mu_w=1/2**6, mu_f=1/2**7, mu_s=0., mu_b=1/2**11, grad_max=(50., 50.), 
         out = ((w, f, s, b), (l, d))
 
         # update
-        w = w - mu_w * gw
-        f = f - mu_f * gf
-        s = s - mu_s * gs
-        b = b - mu_b * gb
+        w = w - lr_w * gw
+        f = f - lr_f * gf
+        s = s - lr_s * gs
+        b = b - lr_b * gb
         fshat = beta * fshat + (1 - beta) * (f * s)
 
         state = (w, f, s, b, fshat)

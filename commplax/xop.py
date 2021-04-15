@@ -272,7 +272,7 @@ def finddelay(x, y):
     k = jnp.arange(-y.shape[0]+1, x.shape[0])
     i = jnp.lexsort((jnp.abs(k), -c))[0] # lexsort to handle case 4
     d = -k[i]
-    return d
+    return d, c
 
 
 def fftconvolve(x, h, mode='full'):

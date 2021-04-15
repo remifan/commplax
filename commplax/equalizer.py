@@ -3,30 +3,36 @@ from jax import jit, device_put, numpy as jnp, lax
 from commplax import xop, comm, xcomm, util, adaptive_filter as af
 
 
-def tddbp(signal, sr, lp, dist, spans, taps, xi=0.6, D=16.5E-6, polmux=True, backend=util.gpufirstbackend()):
+def tddbp(signal, sr, lp, dist, spans, taps, xi=0.6, D=16.5E-6, polmux=True, mode='SAME', backend=util.gpufirstbackend()):
     x = device_put(signal)
     return jit(_tddbp,
-               static_argnums=(4, 5, 8,),
-               backend=backend)(x, sr, lp, dist, spans, taps, xi, D, polmux)
+               static_argnums=(4, 5, 8, 9),
+               backend=backend)(x, sr, lp, dist, spans, taps, xi, D, polmux, mode)
 
 
-def _tddbp(x, sr, lp, dist, spans, taps, xi, D, polmux):
+def _tddbp(x, sr, lp, dist, spans, taps, xi, D, polmux, mode):
     x = xcomm.normpower(x)
     powscale = np.sqrt(2) if polmux else 1.
     _, param_D, param_N = xcomm.dbp_params(sr, dist/spans, spans, taps, fiber_dispersion=D, polmux=polmux)
     return xcomm.dbp_timedomain(x / powscale, param_D,
-                                xi * 10.**(lp / 10 - 3) * param_N) * powscale
+                                xi * 10.**(lp / 10 - 3) * param_N,
+                                mode=mode) * powscale
 
 
-def cdcomp(signal, sr, CD, fc=193.4e12, polmux=True):
+def cdctaps(sr, CD, fc=193.4e12):
     pi = np.pi
     C = 299792458. # speed of light [m/s]
-    D = 16.5E-6
-    dist = CD / D
     lambda_ = C / fc
     # estimate minimal required number of taps for single step TDDBP
     mintaps = int(np.ceil(2 * pi * CD * lambda_**2 / (2 * pi * C) * sr**2))
-    return tddbp(signal, sr, 0., dist, 1, mintaps, xi=0., D=D, polmux=polmux)
+    return mintaps
+
+
+def cdcomp(signal, sr, CD, fc=193.4e12, polmux=True, mode='SAME', backend=None):
+    D = 16.5E-6
+    dist = CD / D
+    mintaps = cdctaps(sr, CD, fc)
+    return tddbp(signal, sr, 0., dist, 1, mintaps, xi=0., D=D, polmux=polmux, mode=mode, backend=backend)
 
 
 def modulusmimo(signal, sps=2, taps=19, cma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
@@ -95,7 +101,7 @@ def _lmsmimo(signal, truth, sps, taps, mu_w, mu_f, mu_s, mu_b, beta):
     s0 = lms_init(taps, mimoinit='centralspike')
     _, (ss, (loss, *_)) = af.iterate(lms_update, s0, yf, x)
     xhat = lms_map(ss, yf)
-    return xhat, loss
+    return xhat, ss[-1], loss
 
 
 def rdemimo(signal, truth, lr=1/2**13, sps=2, taps=31, backend='cpu',

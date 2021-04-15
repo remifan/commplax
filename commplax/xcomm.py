@@ -2,6 +2,8 @@ import jax
 from jax import jit, vmap, numpy as jnp, device_put
 from commplax import xop, comm, experimental as exp
 
+cpus = jax.devices('cpu')
+
 
 def getpower(x, real=False):
     ''' get signal power '''
@@ -84,7 +86,7 @@ def dbp_params(
     return H, h_casual, phi
 
 
-def dbp_timedomain(y, h, c):
+def dbp_timedomain(y, h, c, mode='SAME'):
 
     y = device_put(y)
     h = device_put(h)
@@ -92,7 +94,8 @@ def dbp_timedomain(y, h, c):
 
     steps = c.shape[0]
 
-    D = jit(vmap(lambda y,h: xop.conv1d_fft_oa(y, h, mode='SAME'), in_axes=1, out_axes=1))
+    #D = jit(vmap(lambda y,h: xop.conv1d_fft_oa(y, h, mode=mode), in_axes=1, out_axes=1))
+    D = jit(vmap(lambda y,h: xop.fftconvolve(y, h, mode=mode), in_axes=1, out_axes=1))
     # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # often too slow for long h
     N = jit(lambda y,c: y * jnp.exp(1j * (abs(y)**2 @ c)))
 
@@ -206,7 +209,7 @@ def localfoe(signal, frame_size=16384, frame_step=5000, sps=1, fitkind=None, deg
     '''
     resolution = samplerate / N / 4 / sps (linear interp.)
     '''
-    y = device_put(signal)
+    y = device_put(signal, cpus[0])
     dims = y.shape[-1]
     fo_local = xop.framescaninterp(y, method, frame_size, frame_step, sps)
     if fitkind is not None:

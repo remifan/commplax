@@ -52,10 +52,17 @@ def frame_gen(x, flen, fstep, pad_end=False, pad_constants=0):
         yield x[s + i * fstep,...]
 
 
-def frame(x, flen, fstep, pad_end=False, pad_constants=0):
+def frame(x, flen, fstep=None, pad_end=False, pad_constants=0):
+    if fstep is None:
+        fstep = flen
+
     x, fnum = frame_prepare(x, flen, fstep, pad_end=pad_end, pad_constants=pad_constants)
 
     ind = np.arange(flen)[None,:] + fstep * np.arange(fnum)[:,None]
     return x[ind,...]
+
+
+def delay(x, d):
+    return np.roll(x, d, axis=0)
 
 
