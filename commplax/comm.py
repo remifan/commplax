@@ -420,7 +420,13 @@ def align_periodic(y, x, begin=0, last=2000, b=0.5):
     return z, d
 
 
-def qamqot(y, x, count_dim=True, count_total=True, L=None):
+def qamqot(y, x, count_dim=True, count_total=True, L=None, checktruthscale=True):
+    if checktruthscale:
+        ux = np.unique(x)
+        powdiff = abs(getpower(ux) - getpower(const(str(len(ux)) + 'QAM')))
+        if  powdiff > 1e-4:
+            #TODO add warning colors
+            print("truth QAM data is not properly scaled to its canonical form, scale = %.5f" % powdiff)
 
     y = shape_signal(y)
     x = shape_signal(x)
