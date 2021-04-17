@@ -115,7 +115,6 @@ def dbplms(sps=2,
         zf = xop.frame(z, lmshparams.taps, sps)
         mimostat, (mimovals, _) = af.iterate(lms_update, mimostat, zf, x)
         z = lms_map(mimovals, zf)
-        z *= qamscale
 
         afstate = AFStat(mimostat,)
         afvals = AFVals(mimovals,)
@@ -137,7 +136,6 @@ def dbplms(sps=2,
         z = matchedfilter(z, mf, mode='valid')
         zf = xop.frame(z, lmshparams.taps, sps)
         z = lms_map(mimovals, zf)
-        z *= qamscale
         return z, inpbuf
 
     def lossfn(v, z, inp, params: Params, inpbuf: InpBuf, afvals: AFVals):

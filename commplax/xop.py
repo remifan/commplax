@@ -244,6 +244,10 @@ def overlap_and_add(array, frame_step):
     return array
 
 
+def delay(x, d):
+    return jnp.roll(x, d, axis=0)
+
+
 @jit
 def finddelay(x, y):
     '''
