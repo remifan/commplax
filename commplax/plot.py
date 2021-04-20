@@ -63,7 +63,7 @@ def waveform(x, axes=None):
     axes[1].plot([x.imag.mean().tolist(),] * len(x))
 
 
-def desc_filter(w, H, ax=None, color=None, legend=None, phase=True):
+def desc_filter(w, H, ax=None, colors=None, legend=None, phase=True):
     if ax is None:
         fig = plt.figure()
         ax1 = plt.gca()
@@ -77,16 +77,16 @@ def desc_filter(w, H, ax=None, color=None, legend=None, phase=True):
 
     lgd   = tuple(map(str, np.arange(len(H)))) if legend is None else legend
     lgd   = [lgd] if not isinstance(lgd, list) and not isinstance(lgd, tuple) else lgd
-    color = [color] if not isinstance(color, list) and not isinstance(color, tuple) else color
+    colors = [colors] * len(H) if colors is None else colors
 
     for H_,i in zip(H, range(len(H))):
-        ax1.plot(w, abs(H_))
+        ax1.plot(w, abs(H_), color=colors[i])
         ax1.set_ylabel('amp.')
 
         if phase:
             if ax2 is None:
                 ax2 = ax1.twinx()
-            ax2.plot(w, np.unwrap(np.angle(H_)), alpha=0.4)
+            ax2.plot(w, np.unwrap(np.angle(H_)), color=colors[i], alpha=0.4)
             ax2.set_ylabel('phs.')
     ax1.legend(lgd, loc='best')
 
