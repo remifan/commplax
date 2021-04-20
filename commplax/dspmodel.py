@@ -6,63 +6,73 @@ from collections import namedtuple
 from commplax import op, xop, comm, xcomm, adaptive_filter as af, equalizer as eq
 
 
-DSPModel = namedtuple('DSPModel', ['params', 'inpbuf', 'afstat', 'delay', 'eziter', 'iter', 'model', 'value_and_grad'])
-LMSHparams = namedtuple('LMSHparams', ['taps', 'lr_w', 'lr_f', 'lockgain'], defaults=(31, 1/2**6, 1/2**7, False))
-DBPHparams = namedtuple('DBPHparams', ['sr', 'lspan', 'nspan', 'taps', 'xi', 'lpdbm', 'stps', 'vspan', 'fc', 'disp'],
-                       defaults=(None, None, None, None, 0.5, 30., 1, None, 299792458/1550E-9, 16.5E-6))
-CDCHparams = namedtuple('CDCHparams', ['sr', 'cd'])
+LMSHparams = namedtuple('LMSHparams', ['taps', 'lr_w', 'lr_f', 'lr_b', 'lockgain'], defaults=(31, 1/2**6, 1/2**7, 1/2**11, False))
+DBPHparams = namedtuple('DBPHparams', ['sr', 'lspan', 'nspan', 'taps', 'xi', 'lpdbm', 'stps', 'vspan', 'fc', 'disp', 'ftaps'],
+                        defaults=(None, None, None, None, 0.5, 30., 1, None, 299792458/1550E-9, 16.5E-6, 1))
 MFHparams = namedtuple('MFHparams', ['taps', 'kind'], defaults=(129, 'delta'))
 DBPParams = namedtuple('DBPParams', ['d', 'n'])
+DSPModel = namedtuple('DSPModel', ['params', 'inpbuf', 'afstat', 'delay', 'eziter', 'iter', 'model', 'value_and_grad'])
 
 
 def matchedfilter(y, h, mode='same'):
   return vmap(lambda y, h: xop.convolve(y, h, mode=mode), in_axes=-1, out_axes=-1)(y, h)
 
 
-def delta(taps, dims=2):
-    mf = np.zeros((taps, dims), dtype=np.complex64)
+def delta(taps, dims=2, dtype=np.complex64):
+    mf = np.zeros((taps, dims), dtype=dtype)
     mf[(taps - 1) // 2, :] = 1.
-    return jnp.array(mf)
+    return mf
 
 
-def dbplms(sps=2,
+def dbplms(var=None,
+           sps=2,
            dims=2,
            modformat='16QAM',
            dbphparams: DBPHparams=None,
-           cdchparams: CDCHparams=None,
            mfhparams: MFHparams=MFHparams(taps=129, kind='delta'),
-           lmshparams: LMSHparams=(LMSHparams(taps=11, lr_w=1/2**7, lr_f=1/2**7, lockgain=False))):
+           lmshparams: LMSHparams=(LMSHparams(taps=31, lr_w=1/2**6, lr_f=1/2**7, lr_b=1/2**11, lockgain=False))):
+    qamscale = xcomm.qamscale(modformat)
 
     lms_init, lms_update, lms_map = af.ddlms(lr_w=lmshparams.lr_w,
                                              lr_f=lmshparams.lr_f,
+                                             lr_b=lmshparams.lr_b,
                                              lockgain=lmshparams.lockgain)
-
-    if mfhparams.kind.lower() == 'delta':
-        mf = delta(mfhparams.taps)
-    else:
-        raise ValueError('matched filter of the specified kind is not support yet')
-    mftaps = mf.shape[0]
     mimotaps = lmshparams.taps
 
-    qamscale = xcomm.qamscale(modformat)
+    try:
+        mf=var.mf
+    except AttributeError:
+        if mfhparams.kind.lower() == 'delta':
+            mf = delta(mfhparams.taps)
+        else:
+            raise ValueError('matched filter of the specified kind is not support yet')
 
     if dbphparams is not None:
-        _, paramD, paramN = comm.dbp_params(dbphparams.sr,
-                                            dbphparams.lspan,
-                                            dbphparams.nspan,
-                                            dbphparams.taps,
-                                            launch_power=dbphparams.lpdbm,
-                                            steps_per_span=dbphparams.stps,
-                                            virtual_spans=dbphparams.vspan,
-                                            fiber_dispersion=dbphparams.disp)
-        dbp = DBPParams(d=paramD, n=paramN * dbphparams.xi)
-        cdctaps = dbp.d.shape[0] * (dbp.d.shape[1] - 1) + 1 # equivalent taps
-    elif cdchparams is not None:
-        dbp = DBPParams(d=None, n=None)
-        cdctaps = eq.cdctaps(cdchparams.sr, cdchparams.cd)
+        try:
+            dbp=var.dbp
+        except AttributeError:
+            _, paramD, paramN = comm.dbp_params(dbphparams.sr,
+                                                dbphparams.lspan,
+                                                dbphparams.nspan,
+                                                dbphparams.taps,
+                                                launch_power=dbphparams.lpdbm,
+                                                steps_per_span=dbphparams.stps,
+                                                virtual_spans=dbphparams.vspan,
+                                                fiber_dispersion=dbphparams.disp)
+            if dbphparams.ftaps > 1:
+                paramN = np.stack([delta(dbphparams.ftaps, dims=dims * dims, dtype=np.float64).reshape((dbphparams.ftaps, dims, dims))] \
+                                  * paramN.shape[0]) * paramN[:, None, :, :]
+            dbp = DBPParams(d=paramD, n=paramN * dbphparams.xi)
     else:
         raise ValueError('dbp and cdc hparams cannot be both absent')
-    cdcpads = af.filterzerodelaypads(cdctaps)
+
+    mftaps = mf.shape[0]
+    dtaps = dbp.d.shape[1]
+    ftaps = dbp.n.shape[1]
+    steps = dbp.d.shape[0]
+    dbptaps = steps * (dtaps - 1 + ftaps - 1) + 1 # equivalent linear filter taps
+
+    cdcpads = af.filterzerodelaypads(dbptaps)
     mfpads = af.filterzerodelaypads(mftaps)
     mimopads = af.filterzerodelaypads(mimotaps, stride=sps)
     ybuf = jnp.zeros(((cdcpads[0] + mfpads[0] + mimopads[0]).sum(), dims), dtype=np.complex64)
@@ -94,22 +104,17 @@ def dbplms(sps=2,
         fomul = fomul[:-cdcpads[0, 1]]
         return (y, x, fomul), InpBuf(ybuf, xbuf, fobuf)
 
-    def tddbp(y, d, n, backend=None):
-        dbpfn = lambda a, b, c: xcomm.dbp_timedomain(a, b, c, mode='valid', homosteps=True, scansteps=True)
-        return jit(dbpfn, backend=backend)(y, d, n)
+    def tddbp(y, d, n, conv=xop.fftconvolve):
+        return xcomm.dbp_timedomain(y, d, n, mode='valid', homosteps=True, scansteps=True, conv=conv)
 
-    @jit
-    def iterate(inp, params: Params, inpbuf: InpBuf, afstate: AFStat):
+    def iterate(inp, params: Params, inpbuf: InpBuf, afstate: AFStat, conv=xop.fftconvolve):
         inp, inpbuf = updinpbuf(inp, inpbuf)
 
         y, x, fomul = inp
         mf, dbp = params
         mimostat, = afstate
 
-        if dbphparams is not None:
-            z = tddbp(y, dbp.d, dbp.n)
-        else:
-            z = eq.cdcomp(y, cdchparams.sr, cdchparams.cd, mode='valid')
+        z = tddbp(y, dbp.d, dbp.n, conv=conv)
         z *= fomul
         z = matchedfilter(z, mf, mode='valid')
         zf = xop.frame(z, lmshparams.taps, sps)
@@ -120,18 +125,14 @@ def dbplms(sps=2,
         afvals = AFVals(mimovals,)
         return z, inpbuf, afstate, afvals
 
-    @jit
-    def model(inp, params: Params, inpbuf: InpBuf, afvals: AFVals):
+    def model(inp, params: Params, inpbuf: InpBuf, afvals: AFVals, conv=xop.fftconvolve):
         inp, inpbuf = updinpbuf(inp, inpbuf)
 
         y, _, fomul = inp
         mf, dbp = params
         mimovals, = afvals
 
-        if dbphparams is not None:
-            z = tddbp(y, dbp.d, dbp.n)
-        else:
-            z = eq.cdcomp(y, cdchparams.sr, cdchparams.cd, mode='valid')
+        z = tddbp(y, dbp.d, dbp.n, conv=conv)
         z *= fomul
         z = matchedfilter(z, mf, mode='valid')
         zf = xop.frame(z, lmshparams.taps, sps)
@@ -147,8 +148,8 @@ def dbplms(sps=2,
         loss, grads = jax.value_and_grad(lossfn)(v, z, inp, params, inpbuf, afvals)
         return loss, grads
 
-    def eziter(inp, params: Params=params0, zerodelayroll=True, backend='cpu'):
-        z = jit(iterate, backend=backend)(inp, params, inpbuf0, afstate0)[0]
+    def eziter(inp, params: Params, zerodelayroll=True, backend='cpu', conv=xop.conv1d_fft_oa):
+        z = jit(partial(iterate, conv=conv), backend=backend)(inp, params, inpbuf0, afstate0)[0]
         return xop.delay(z, -dspdelay) if zerodelayroll else z
 
     return DSPModel(params0, inpbuf0, afstate0, dspdelay, eziter, iterate, model, value_and_grad)
