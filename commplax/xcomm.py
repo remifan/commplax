@@ -1,6 +1,8 @@
 import jax
 from jax import jit, vmap, numpy as jnp, device_put
+from jax.core import Value
 from commplax import xop, comm, experimental as exp
+from functools import partial
 
 cpus = jax.devices('cpu')
 
@@ -86,7 +88,17 @@ def dbp_params(
     return H, h_casual, phi
 
 
-def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True):
+def mimoconv(y, h, mode='same', conv=xop.fftconvolve):
+    conv = jnp.convolve
+    dims = y.shape[-1]
+    y = jnp.tile(y, (1, dims))
+    h = jnp.reshape(h, (h.shape[0], dims * dims))
+    zflat = jax.vmap(lambda a, b: conv(a, b, mode=mode), in_axes=-1, out_axes=-1)(y, h)
+    z = zflat.T.reshape((dims, dims, -1)).sum(axis=1).T
+    return z
+
+
+def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xop.fftconvolve):
 
     y = device_put(y)
     h = device_put(h)
@@ -98,10 +110,26 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True):
     y /= optpowscale
 
     md = 'SAME' if homosteps else mode
-    #D = jit(vmap(lambda y,h: xop.conv1d_fft_oa(y, h, mode=mode), in_axes=1, out_axes=1))
-    D = jit(vmap(lambda y, h: xop.fftconvolve(y, h, mode=md), in_axes=1, out_axes=1))
+
+    D = jit(vmap(lambda y, h: conv(y, h, mode=md), in_axes=1, out_axes=1))
     # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # often too slow for long h
-    N = jit(lambda y, c: y * jnp.exp(1j * (abs(y)**2 @ c)))
+
+
+    if c.ndim == 3:
+        if c.shape[1:] == (dims, dims):
+            N = jit(lambda y, c: y * jnp.exp(1j * (abs(y)**2 @ c)))
+            C = 0
+        else:
+            F = jit(vmap(lambda y, h: conv(y, h, mode='same'), in_axes=1, out_axes=1))
+            N = lambda y, c: y * jnp.exp(1j * F(abs(y)**2, c))
+            C = c.shape[1] - 1
+    elif c.ndim == 4:
+        # MIMO convolution
+        F = jit(lambda p, c: mimoconv(p, c, mode='same', conv=conv))
+        N = lambda y, c: y * jnp.exp(1j * F(abs(y)**2, c))
+        C = c.shape[1] - 1
+    else:
+        raise ValueError('wrong c shape')
 
     T = h.shape[1] - 1
     K = h.shape[0]
@@ -116,7 +144,7 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True):
             y = N(y, c[i])
 
     if homosteps and mode.lower() == 'valid':
-       y = y[K * T // 2: -K * T // 2]
+       y = y[K * (T + C) // 2: -K * (T + C) // 2]
 
     return y * optpowscale
 
