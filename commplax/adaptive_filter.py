@@ -5,7 +5,7 @@ from typing import Any, Callable, NamedTuple, Tuple, Union
 from functools import partial
 from collections import namedtuple
 from jax import jit, numpy as jnp
-from commplax import comm, xop
+from commplax import comm, xop, cxopt
 from jax.tree_util import tree_flatten, tree_unflatten, register_pytree_node
 
 Array = Any
@@ -357,6 +357,10 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), 
         amplitude modulation signals. Optics express, 20(24), pp.26236-26251.
     '''
     const = jnp.asarray(const)
+    lr_w = cxopt.make_schedule(lr_w)
+    lr_f = cxopt.make_schedule(lr_f)
+    lr_s = cxopt.make_schedule(lr_s)
+    lr_b = cxopt.make_schedule(lr_b)
 
     def init(taps=31, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
         w0 = mimoinitializer(taps, dims, dtype, mimoinit)
@@ -364,10 +368,11 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), 
         s0 = jnp.full((dims,), 1., dtype=dtype)
         b0 = jnp.full((dims,), 0., dtype=dtype)
         fshat0 = jnp.full((dims,), 1., dtype=dtype)
-        return (w0, f0, s0, b0, fshat0)
+        i0 = 0
+        return (w0, f0, s0, b0, fshat0, i0)
 
     def update(state, inp):
-        w, f, s, b, fshat = state
+        w, f, s, b, fshat, i = state
         u, x, train = inp
 
         if lockgain:
@@ -404,13 +409,14 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), 
         out = ((w, f, s, b), (l, d))
 
         # update
-        w = w - lr_w * gw
-        f = f - lr_f * gf
-        s = s - lr_s * gs
-        b = b - lr_b * gb
+        w = w - lr_w(i) * gw
+        f = f - lr_f(i) * gf
+        s = s - lr_s(i) * gs
+        b = b - lr_b(i) * gb
         fshat = beta * fshat + (1 - beta) * (f * s)
+        i += 1
 
-        state = (w, f, s, b, fshat)
+        state = (w, f, s, b, fshat, i)
 
         return state, out
 
