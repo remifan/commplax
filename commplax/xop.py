@@ -4,6 +4,14 @@ from jax.ops import index, index_add, index_update
 from functools import partial
 
 
+def isfloat(x):
+    return issubclass(x.dtype.type, np.floating)
+
+
+def iscomplex(x):
+    return issubclass(x.dtype.type, np.complexfloating)
+
+
 def scan(f, init, xs, length=None, reverse=False, unroll=1, jit_device=None, jit_backend=None):
     '''
     "BUG: ``lax.scan`` is known to cause memory leaks when not called within a jitted function"
@@ -77,7 +85,7 @@ def _fft_size_factor(x, gpf):
     return x
 
 
-def conv1d_oa_fftsize(signal_length, kernel_length, oa_factor=8, max_fft_prime_factor=5):
+def conv1d_oa_fftsize(signal_length, kernel_length, oa_factor=10, max_fft_prime_factor=5):
     target_fft_size = kernel_length * oa_factor
     if target_fft_size < signal_length:
         fft_size = _fft_size_factor(target_fft_size, max_fft_prime_factor)
@@ -103,6 +111,12 @@ def _conv1d_fft_oa_same(signal, kernel, fft_size):
 def _conv1d_fft_oa_full(signal, kernel, fft_size):
     ''' fast 1d convolute underpinned by FFT and overlap-and-add operations
     '''
+    if isfloat(signal) and isfloat(kernel):
+        fft = jnp.fft.rfft
+        ifft = jnp.fft.irfft
+    else:
+        fft = jnp.fft.fft
+        ifft = jnp.fft.ifft
 
     signal = device_put(signal)
     kernel = device_put(kernel)
@@ -121,7 +135,7 @@ def _conv1d_fft_oa_full(signal, kernel, fft_size):
     signal = jnp.pad(signal, [0, fft_size - frame_length])
     kernel = jnp.pad(kernel, [0, fft_size - kernel_length])
 
-    signal = jnp.fft.ifft(jnp.fft.fft(signal) * jnp.fft.fft(kernel))
+    signal = ifft(fft(signal) * fft(kernel))
     signal = overlap_and_add(signal, frame_length)
 
     signal = signal[:output_length]
@@ -137,11 +151,11 @@ def _conv1d_fft_oa(signal, kernel, fft_size, mode):
         return _conv1d_fft_oa_full(signal, kernel, fft_size)
 
 
-def conv1d_fft_oa(signal, kernel, fft_size=None, mode='SAME'):
+def conv1d_fft_oa(signal, kernel, fft_size=None, oa_factor=10, mode='SAME'):
     if fft_size is None:
         signal_length = signal.shape[-1]
         kernel_length = kernel.shape[-1]
-        fft_size = conv1d_oa_fftsize(signal_length, kernel_length)
+        fft_size = conv1d_oa_fftsize(signal_length, kernel_length, oa_factor=oa_factor)
 
     return _conv1d_fft_oa(signal, kernel, fft_size, mode)
 
@@ -306,8 +320,12 @@ def fftconvolve(x, h, mode='full'):
 
 @jit
 def _fftconvolve(x, h):
-    fft = jnp.fft.fft
-    ifft = jnp.fft.ifft
+    if isfloat(x) and isfloat(h):
+        fft = jnp.fft.rfft
+        ifft = jnp.fft.irfft
+    else:
+        fft = jnp.fft.fft
+        ifft = jnp.fft.ifft
 
     N = x.shape[0]
     M = h.shape[0]
