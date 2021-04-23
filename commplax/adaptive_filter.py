@@ -78,7 +78,8 @@ def array(af_maker, replicas, axis=-1):
         @functools.wraps(update)
         def rep_update(af_state, af_inp):
             if update.trainable:
-                in_axis = (-1, (-1, -1, None))
+                af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
+                in_axis = (-1, (-1, -1, None)[:len(af_inp)])
             else:
                 in_axis = axis
             af_state, af_out = jax.vmap(update, in_axes=in_axis, out_axes=axis)(af_state, af_inp)
