@@ -1,3 +1,4 @@
+from jax.core import Value
 import numpy as np
 from jax import lax, jit, vmap, numpy as jnp, device_put
 from jax.ops import index, index_add, index_update
@@ -38,6 +39,7 @@ def _conv1d_lax(signal, kernel, mode):
     '''
     CPU impl. is insanely slow for large kernels, jaxlib-cuda (i.e. cudnn's GPU impl.)
     is highly recommended
+    see https://github.com/google/jax/issues/5227#issuecomment-748386278
     '''
     x = device_put(signal)
     h = device_put(kernel)
@@ -200,6 +202,33 @@ def frame(x, flen, fstep, pad_end=False, pad_constants=0.):
     return _frame(x, flen, fstep, pad_end, pad_constants)
 
 
+def frame_shape(s, flen, fstep, pad_end=False, allowwaste=True):
+    n = s[0]
+    ndim = len(s)
+
+    if ndim < 2:
+        raise ValueError('rank must be atleast 2, got %d instead' % ndim)
+
+    if n < flen:
+        raise ValueError('array length {} < frame length {}'.format(n, flen))
+
+    if flen < fstep:
+        raise ValueError('frame length {} < frame step {}'.format(flen, fstep))
+
+    if pad_end:
+        fnum = -(-n // fstep) # double negatives to round up
+        pad_len = (fnum - 1) * fstep + flen - n
+        n = n + pad_len
+    else:
+        waste = (n - flen) % fstep
+        if not allowwaste and waste != 0:
+            raise ValueError('waste %d' % waste)
+        fnum = 1 + (n - flen) // fstep
+        n = (fnum - 1) * fstep + flen
+
+    return (fnum, flen) + s[1:]
+
+
 def framescaninterp(x, func, flen, fstep, P=1):
     fn = lambda carry, y: (carry, func(y))
     N = x.shape[0]
@@ -306,45 +335,68 @@ def fftconvolve(x, h, mode='full'):
 
     T = h.shape[0]
     N = x.shape[0] + T - 1
+
     y = _fftconvolve(x, h)
 
     if mode == 'full':
         return y
     elif mode == 'same':
-        return y[(T - 1) // 2:N - (T - 1) // 2]
+        return y[(T - 1) // 2:N - T // 2]
     elif mode == 'valid':
         return y[T - 1:N - T + 1]
     else:
-        raise ValueError('invalid mode')
+        raise ValueError('invalid mode ''%s''' % mode)
 
 
 @jit
 def _fftconvolve(x, h):
-    if isfloat(x) and isfloat(h):
-        fft = jnp.fft.rfft
-        ifft = jnp.fft.irfft
-    else:
-        fft = jnp.fft.fft
-        ifft = jnp.fft.ifft
-
+    fft = jnp.fft.fft
+    ifft = jnp.fft.ifft
     N = x.shape[0]
     M = h.shape[0]
-
     out_length = N + M -1
-
     fft_size = _fft_size_factor(out_length, 5)
-
     x = jnp.pad(x, [0, fft_size - N])
     h = jnp.pad(h, [0, fft_size - M])
-
-    X = fft(x)
-    H = fft(h)
-
-    y = ifft(X * H)
-
+    y = ifft(fft(x) * fft(h))
     y = y[:out_length]
+    return y.real if isfloat(x) and isfloat(h) else y
 
-    return y
+
+def fftconvolve2(x, h, mode='full'):
+    x = jnp.atleast_2d(x)
+    h = jnp.atleast_2d(h)
+
+    mode = mode.lower()
+
+    T0 = h.shape[0]
+    T1 = h.shape[1]
+    N0 = x.shape[0] + T0 - 1
+    N1 = x.shape[1] + T1 - 1
+
+    y = _fftconvolve2(x, h)
+
+    if mode == 'full':
+        return y
+    elif mode == 'same':
+        return y[(T0 - 1) // 2: N0 - T0 // 2, (T1 - 1) // 2: N1 - T1 // 2]
+    elif mode == 'valid':
+        return y[T0 - 1: N0 - T0 + 1, T1 - 1: N1 - T1 + 1]
+    else:
+        raise ValueError('invalid mode ''%s''' % mode)
+
+
+@jit
+def _fftconvolve2(x, h):
+    fft = jnp.fft.fft2
+    ifft = jnp.fft.ifft2
+    out_shape = [x.shape[0] + h.shape[0] - 1, x.shape[1] + h.shape[1] - 1]
+    fft_shape = [_fft_size_factor(out_shape[0], 5), _fft_size_factor(out_shape[1], 5)]
+    hpad = jnp.pad(h, [[0, fft_shape[0] - h.shape[0]], [0, fft_shape[1] - h.shape[1]]])
+    xpad = jnp.pad(x, [[0, fft_shape[0] - x.shape[0]], [0, fft_shape[1] - x.shape[1]]])
+    y = ifft(fft(xpad) * fft(hpad))
+    y = y[:out_shape[0], :out_shape[1]]
+    return y.real if isfloat(x) and isfloat(h) else y
 
 
 def convolve(a, v, mode='full', method='auto'):
