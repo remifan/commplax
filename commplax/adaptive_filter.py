@@ -6,7 +6,7 @@ from functools import partial
 from collections import namedtuple
 from jax import jit, numpy as jnp
 from commplax import comm, xop, cxopt
-from jax.tree_util import tree_flatten, tree_unflatten, register_pytree_node
+from jax.tree_util import tree_flatten, tree_unflatten
 
 Array = Any
 Params = Any
@@ -17,20 +17,20 @@ AFState = Any
 
 Step = int
 InitFn = Callable
-UpdateFn = Callable[[AFState, Signal], AFState]
-StaticMapFn = Callable[[Any, Any], Any]
+UpdateFn = Callable[[Step, AFState, Signal], AFState]
+ApplyFn = Callable[[Any, Any], Any]
 
 
 class AdaptiveFilter(NamedTuple):
     init_fn: InitFn
     update_fn: UpdateFn
-    eval_fn: StaticMapFn
+    eval_fn: ApplyFn
 
 
 def adaptive_filter(af_maker, trainable=False):
     @functools.wraps(af_maker)
     def _af_maker(*args, **kwargs):
-        init, update, static_map = af_maker(*args, **kwargs)
+        init, update, apply = af_maker(*args, **kwargs)
 
         @functools.wraps(init)
         def _init(*args, **kwargs):
@@ -39,22 +39,22 @@ def adaptive_filter(af_maker, trainable=False):
 
         @jax.jit
         @functools.wraps(update)
-        def _update(af_state, af_inp):
+        def _update(i, af_state, af_inp):
             if trainable:
                 af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
-                af_inp = (af_inp + (0., False))[:3]
+                af_inp = (af_inp + (0.,))[:2]
             af_inp = jax.device_put(af_inp)
-            af_state, af_out = update(af_state, af_inp)
+            af_state, af_out = jax.lax.stop_gradient(update(i, af_state, af_inp))
             return af_state, af_out
 
         @jax.jit
-        @functools.wraps(static_map)
-        def _static_map(af_ps, af_xs):
-            return static_map(af_ps, af_xs)
+        @functools.wraps(apply)
+        def _apply(af_ps, af_xs):
+            return apply(af_ps, af_xs)
 
         _update.trainable = trainable
 
-        return AdaptiveFilter(_init, _update, _static_map)
+        return AdaptiveFilter(_init, _update, _apply)
 
     return _af_maker
 
@@ -62,7 +62,7 @@ def adaptive_filter(af_maker, trainable=False):
 def array(af_maker, replicas, axis=-1):
     @functools.wraps(af_maker)
     def rep_af_maker(*args, **kwargs):
-        init, update, static_map = af_maker(*args, **kwargs)
+        init, update, apply = af_maker(*args, **kwargs)
 
         @functools.wraps(init)
         def rep_init(*args, **kwargs):
@@ -74,23 +74,32 @@ def array(af_maker, replicas, axis=-1):
 
         @jax.jit
         @functools.wraps(update)
-        def rep_update(af_state, af_inp):
-            if update.trainable:
-                af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
-                in_axis = (-1, (-1, -1, None)[:len(af_inp)])
-            else:
-                in_axis = axis
-            af_state, af_out = jax.vmap(update, in_axes=in_axis, out_axes=axis)(af_state, af_inp)
+        def rep_update(i, af_state, af_inp):
+            af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, af_state, af_inp)
             return af_state, af_out
 
         @jax.jit
-        @functools.wraps(static_map)
-        def rep_static_map(af_ps, af_xs):
-            return jax.vmap(static_map, in_axes=axis, out_axes=axis)(af_ps, af_xs)
+        @functools.wraps(apply)
+        def rep_apply(af_ps, af_xs):
+            return jax.vmap(apply, in_axes=axis, out_axes=axis)(af_ps, af_xs)
 
-        return AdaptiveFilter(rep_init, rep_update, rep_static_map)
+        return AdaptiveFilter(rep_init, rep_update, rep_apply)
 
     return rep_af_maker
+
+
+def frame(y, taps, sps, rtap=None):
+    y_pad = jnp.pad(y, mimozerodelaypads(taps=taps, sps=sps, rtap=rtap))
+    yf = jnp.array(xop.frame(y_pad, taps, sps))
+    return yf
+
+
+def iterate(update: UpdateFn, step0: Step, state: AFState, signal: Signal, truth=None, device=None):
+    steps = step0 + jnp.arange(signal.shape[0])
+    truth = jnp.zeros((0, signal.shape[-1]), dtype=signal.dtype) if truth is None else truth[:signal.shape[0]]
+    truth = jnp.pad(truth, [[0, signal.shape[0] - truth.shape[0]], [0, 0]])
+    xs = (steps, signal, truth)
+    return steps[-1], xop.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs, jit_device=device)
 
 
 def mimo(w, u):
@@ -154,50 +163,6 @@ def mimozerodelaypads(taps, sps=2, rtap=None):
     return filterzerodelaypads(taps, sps, rtap)
 
 
-def frame(y, taps, sps, rtap=None):
-    y_pad = jnp.pad(y, mimozerodelaypads(taps=taps, sps=sps, rtap=rtap))
-    yf = jnp.array(xop.frame(y_pad, taps, sps))
-    return yf
-
-
-def make_train_argin(ys, truth=None, train=None, sps=1):
-    leny = ys.shape[0] // sps
-    if truth is not None:
-        lent = truth.shape[0]
-        if lent > leny:
-            truth = truth[:leny]
-        if train is None:
-            T = jnp.full(lent, True)
-            F = jnp.full(leny - lent, False)
-            train = jnp.concatenate([T, F])
-        elif train is True:
-            train = jnp.full(leny, True)
-        elif train is False:
-            train = jnp.full(leny, False)
-            truth = jnp.zeros_like(ys)
-        elif isinstance(train, float):
-            train = int(train * leny)
-            T = jnp.full(train, True)
-            F = jnp.full(leny - train, False)
-            train = jnp.concatenate([T, F])
-        elif isinstance(train, int):
-            T = jnp.full(train, True)
-            F = jnp.full(leny - train, False)
-            train = jnp.concatenate([T, F])
-        else:
-            pass
-        truth = jnp.concatenate([truth, jnp.zeros_like(ys, shape=(leny - lent, ys.shape[-1]))])
-        xs = (ys, truth, train)
-    else:
-        xs = ys
-    return jax.device_put(xs)
-
-
-def iterate(update, state, signal, truth=None, train=None, device=None):
-    xs = make_train_argin(signal, truth, train)
-    return xop.scan(update, state, xs, jit_device=device)
-
-
 def mimoinitializer(taps, dims, dtype, initkind):
     initkind = initkind.lower()
     if initkind == 'zeros':
@@ -214,6 +179,8 @@ def mimoinitializer(taps, dims, dtype, initkind):
 
 @adaptive_filter
 def cma(lr=1e-4, R2=1.32, const=None):
+    lr = cxopt.make_schedule(lr)
+
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
@@ -224,21 +191,21 @@ def cma(lr=1e-4, R2=1.32, const=None):
             w0[np.arange(dims), np.arange(dims), ctap] = 1.
         return w0.astype(dtype)
 
-    def update(w, u):
-        def loss_fn(w, u):
-            v = r2c(mimo(w, u)[None, :])[0, :]
-            loss = jnp.sum(jnp.abs(R2 - jnp.abs(v)**2))
-            return loss
+    def loss_fn(w, u):
+        v = r2c(mimo(w, u)[None, :])[0, :]
+        loss = jnp.sum(jnp.abs(R2 - jnp.abs(v)**2))
+        return loss
 
+    def update(i, w, u):
         l, g = jax.value_and_grad(loss_fn)(w, u)
         out = (w, l)
-        w = w - lr * g.conj()
+        w = w - lr(i) * g.conj()
         return w, out
 
-    def static_map(ws, yf):
+    def apply(ws, yf):
         return jax.vmap(mimo)(ws, yf)
 
-    return AdaptiveFilter(init, update, static_map)
+    return AdaptiveFilter(init, update, apply)
 
 
 @adaptive_filter
@@ -251,6 +218,8 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
     [2] Vgenis, Athanasios, et al. "Nonsingular constant modulus equalizer for PDM-QPSK coherent
     optical receivers." IEEE Photonics Technology Letters 22.1 (2009): 45-47.
     '''
+    lr = cxopt.make_schedule(lr)
+
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
@@ -265,7 +234,7 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
         r = jnp.zeros((dims, dims, delta), dtype=dtype)
         return w0, z, r, jnp.asarray(beta)
 
-    def update(state, u):
+    def update(i, state, u):
         w, z, r, betapow = state
 
         z = jnp.concatenate((r2c(mimo(w, u)[None, :]), z[:-1,:]))
@@ -291,25 +260,27 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
         g = gcma + gmu
 
         out = (w, l)
-        w = w - lr * g
+        w = w - lr(i) * g
         betapow *= beta
         state = (w, z, r, betapow)
         return state, out
 
-    def static_map(ws, yf):
+    def apply(ws, yf):
         return jax.vmap(mimo)(ws, yf)
 
-    return AdaptiveFilter(init, update, static_map)
+    return AdaptiveFilter(init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)
-def rde(dims=2, lr=2**-15, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
+def rde(dims=2, lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
     '''
     References:
     [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
         carrier phase recovery in a 16-QAM optical coherent system. Journal
         of lightwave technology, 27(15), pp.3042-3049.
     '''
+    lr = cxopt.make_schedule(lr)
+    train = cxopt.make_schedule(train)
 
     if const is not None:
         Rs = jnp.array(jnp.unique(jnp.abs(const)))
@@ -321,12 +292,12 @@ def rde(dims=2, lr=2**-15, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))
             w0[np.arange(dims), np.arange(dims), ctap] = 1.
         return w0
 
-    def update(w, inp):
-        u, Rx, train = inp
+    def update(i, w, inp):
+        u, Rx = inp
 
         def loss_fn(w, u):
             v = r2c(mimo(w, u)[None,:])
-            R2 = jnp.where(train,
+            R2 = jnp.where(train(i),
                            jnp.abs(Rx)**2,
                            Rs[jnp.argmin(
                                jnp.abs(Rs[:,None] * v / jnp.abs(v) - v),
@@ -336,17 +307,17 @@ def rde(dims=2, lr=2**-15, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))
 
         l, g = jax.value_and_grad(loss_fn)(w, u)
         out = (w, l)
-        w = w - lr * g.conj()
+        w = w - lr(i) * g.conj()
         return w, out
 
-    def static_map(ws, yf):
+    def apply(ws, yf):
         return jax.vmap(mimo)(ws, yf)
 
-    return AdaptiveFilter(init, update, static_map)
+    return AdaptiveFilter(init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)
-def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), eps=1e-8,
+def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max=(50., 50.), eps=1e-8,
           beta=0., const=comm.const("16QAM", norm=True), lockgain=False):
     '''
     Enhancements
@@ -362,6 +333,7 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), 
     lr_f = cxopt.make_schedule(lr_f)
     lr_s = cxopt.make_schedule(lr_s)
     lr_b = cxopt.make_schedule(lr_b)
+    train = cxopt.make_schedule(train)
 
     def init(taps=31, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
         w0 = mimoinitializer(taps, dims, dtype, mimoinit)
@@ -369,12 +341,11 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), 
         s0 = jnp.full((dims,), 1., dtype=dtype)
         b0 = jnp.full((dims,), 0., dtype=dtype)
         fshat0 = jnp.full((dims,), 1., dtype=dtype)
-        i0 = 0
-        return (w0, f0, s0, b0, fshat0, i0)
+        return (w0, f0, s0, b0, fshat0)
 
-    def update(state, inp):
-        w, f, s, b, fshat, i = state
-        u, x, train = inp
+    def update(i, state, inp):
+        w, f, s, b, fshat = state
+        u, x = inp
 
         if lockgain:
             w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
@@ -387,7 +358,7 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), 
         c = k * s
         z = c + b
         q = v * fshat + b
-        d = jnp.where(train, x, const[jnp.argmin(jnp.abs(const[:,None] - q[None,:]), axis=0)])
+        d = jnp.where(train(i), x, const[jnp.argmin(jnp.abs(const[:,None] - q[None,:]), axis=0)])
         l = jnp.sum(jnp.abs(z - d)**2)
 
         psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
@@ -401,9 +372,8 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), 
         gs = -1. / (jnp.abs(k)**2 + eps) * e_s * k.conj()
         gb = -e_b
 
-
-        # clip the grads of f and s which are less regulated than w,
-        # it may stablize this algo. in some corner cases?
+        # bound the grads of f and s which are less regulated than w,
+        # it may stablize this algo. by experience
         gf = jnp.where(jnp.abs(gf) > grad_max[0], gf / jnp.abs(gf) * grad_max[0], gf)
         gs = jnp.where(jnp.abs(gs) > grad_max[1], gs / jnp.abs(gs) * grad_max[1], gs)
 
@@ -415,21 +385,21 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, grad_max=(50., 50.), 
         s = s - lr_s(i) * gs
         b = b - lr_b(i) * gb
         fshat = beta * fshat + (1 - beta) * (f * s)
-        i += 1
 
-        state = (w, f, s, b, fshat, i)
+        state = (w, f, s, b, fshat)
 
         return state, out
 
-    def static_map(ps, yf):
+    def apply(ps, yf):
         ws, fs, ss, bs = ps
         return jax.vmap(mimo)(ws, yf) * fs * ss + bs
 
-    return AdaptiveFilter(init, update, static_map)
+    return AdaptiveFilter(init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)
-def cpane_ekf(alpha=0.99,
+def cpane_ekf(train=False,
+              alpha=0.99,
               beta=0.6,
               Q=1e-4 + 0j,
               R=1e-2 + 0j,
@@ -444,21 +414,22 @@ def cpane_ekf(alpha=0.99,
         society general meeting. IEEE, 2017.
     '''
     const = jnp.asarray(const)
+    train = cxopt.make_schedule(train)
 
     def init(p0=0j):
         state0 = (p0, 1j, 0j, Q, R)
         return state0
 
-    def update(state, inp):
+    def update(i, state, inp):
         Psi_c, P_c, Psi_a, Q, R = state
-        y, x, train = inp
+        y, x = inp
 
         Psi_p = Psi_c
         P_p = P_c + Q
         # exponential moving average
         Psi_a = beta * Psi_a + (1 - beta) * Psi_c
 
-        d = jnp.where(train,
+        d = jnp.where(train(i),
                       x,
                       const[jnp.argmin(jnp.abs(const - y * jnp.exp(-1j * Psi_a)))])
 
@@ -478,14 +449,14 @@ def cpane_ekf(alpha=0.99,
 
         return state, out
 
-    def static_map(Psi, ys):
+    def apply(Psi, ys):
         return ys * jnp.exp(-1j * Psi)
 
-    return AdaptiveFilter(init, update, static_map)
+    return AdaptiveFilter(init, update, apply)
 
 
 @adaptive_filter
-def anf(f0, sr, A=1, phi=0, mu=1e-4):
+def anf(f0, sr, A=1, phi=0, lr=1e-4):
     '''
     References:
     [1] Widrow, Bernard, et al. "Adaptive noise cancelling: Principles and applications."
@@ -494,6 +465,7 @@ def anf(f0, sr, A=1, phi=0, mu=1e-4):
         interconnect with adaptive notch filter for narrowband interference." Optics express
         26.18 (2018): 24066-24074.
     '''
+    lr = cxopt.make_schedule(lr)
     T = 1 / sr
     w0 = 2 * np.pi * f0
 
@@ -501,20 +473,20 @@ def anf(f0, sr, A=1, phi=0, mu=1e-4):
         state0 = (w0, 0)
         return state0
 
-    def update(state, inp):
+    def update(i, state, inp):
         w, i = state
         d = inp
         x = jnp.array([A * np.cos(w0 * i * T + phi), A * np.sin(w0 * i * T + phi)])
         y = jnp.inner(w, x)
         e = d - y
-        w += 2 * mu * e * x
+        w += 2 * lr(i) * e * x
         i += 1
         state = (w, i)
         return state, e
 
-    def static_map(es, ys):
+    def apply(es, ys):
         return ys - es
 
-    return AdaptiveFilter(init, update, static_map)
+    return AdaptiveFilter(init, update, apply)
 
 
