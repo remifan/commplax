@@ -276,6 +276,12 @@ def normpower(x, real=False):
         return x / np.sqrt(getpower(x))
 
 
+def delta(taps, dims=2, dtype=np.complex64):
+    mf = np.zeros((taps, dims), dtype=dtype)
+    mf[(taps - 1) // 2, :] = 1.
+    return mf
+
+
 def qamscale(modformat):
     M = parseqamorder(modformat)
     return np.sqrt((M-1) * 2 / 3)

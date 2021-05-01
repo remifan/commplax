@@ -1,6 +1,7 @@
 import jax
 from jax import jit, vmap, numpy as jnp, device_put
 from jax.core import Value
+import numpy as np
 from commplax import xop, comm, experimental as exp
 from functools import partial
 
@@ -98,7 +99,7 @@ def mimoconv(y, h, mode='same', conv=xop.fftconvolve):
     return z
 
 
-def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xop.fftconvolve):
+def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xop.fftconvolve, mimolpf=False):
 
     y = device_put(y)
     h = device_put(h)
@@ -114,20 +115,19 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xo
     D = jit(vmap(lambda y, h: conv(y, h, mode=md), in_axes=1, out_axes=1))
     # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # often too slow for long h
 
-
     if c.ndim == 3:
-        if c.shape[1:] == (dims, dims):
-            N = jit(lambda y, c: y * jnp.exp(1j * (abs(y)**2 @ c)))
-            C = 0
-        else:
-            F = jit(vmap(lambda y, h: conv(y, h, mode='same'), in_axes=1, out_axes=1))
-            N = lambda y, c: y * jnp.exp(1j * F(abs(y)**2, c))
-            C = c.shape[1] - 1
+        N = jit(lambda y, c: y * jnp.exp(1j * (abs(y)**2 @ c)))
+        C = 0
     elif c.ndim == 4:
         # MIMO convolution
+        ctaps = c.shape[1]
+        if not mimolpf:
+            mask = comm.delta(ctaps, dims=dims * dims, dtype=c.dtype).reshape((ctaps, dims, dims))
+            mask[:, np.arange(dims), np.arange(dims)] = (np.ones(ctaps))[:, None]
+            c *= jnp.array(mask)[None, ...]
         F = jit(lambda p, c: mimoconv(p, c, mode='same', conv=conv))
         N = lambda y, c: y * jnp.exp(1j * F(abs(y)**2, c))
-        C = c.shape[1] - 1
+        C = ctaps - 1
     else:
         raise ValueError('wrong c shape')
 
@@ -145,6 +145,94 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xo
 
     if homosteps and mode.lower() == 'valid':
        y = y[K * (T + C) // 2: -K * (T + C) // 2]
+
+    return y * optpowscale
+
+
+def nltriplets(y, n=1, m=1):
+    return _nltriplets(y, n, m)
+
+
+partial(jit, static_argnums=(1, 2))
+def _nltriplets(y, n, m):
+    N = y.shape[0]
+    if y.shape[-1] != 2:
+        raise ValueError('only polmux signal is allowed')
+    h = y[:, 0]
+    v = y[:, 1]
+
+    boundi = lambda i: jnp.where((0 <= i) & (i < N), i, 0)
+    boundv = lambda i, a: jnp.where((0 <= i) & (i < N), a[i], 0)
+
+    t = jnp.arange(N)
+    m = jnp.arange(-m, m + 1)
+    n = jnp.arange(-n, n + 1)
+    k = m[:, None] + n[None, :]
+    tm = m[None, :] + t[:, None]
+    tn = n[None, :] + t[:, None]
+    tk = k[None, :] + t[:, None, None]
+    tm = boundi(tm)
+    tn = boundi(tn)
+    tk = boundi(tk)
+    hm = boundv(tm, h)
+    hn = boundv(tn, h)
+    hk = boundv(tk, h)
+    vm = boundv(tm, v)
+    vn = boundv(tn, v)
+    vk = boundv(tk, v)
+
+    nlh = hm[:, :, None] * hn[:, None, :] * hk.conj() + vm[:, :, None] * hn[:, None, :] * vk.conj()
+    nlv = vm[:, :, None] * vn[:, None, :] * vk.conj() + hm[:, :, None] * vn[:, None, :] * hk.conj()
+    return jnp.stack([nlh, nlv], axis=-1)
+
+
+def dbp_timedomain2(y, h, c, n, mode='SAME', homosteps=True, scansteps=True, conv=xop.fftconvolve):
+
+    y = device_put(y)
+    h = device_put(h)
+    c = device_put(c)
+
+    dims = y.shape[-1]
+
+    optpowscale = jnp.sqrt(dims)
+    y /= optpowscale
+
+    md = 'SAME' if homosteps else mode
+
+    ntaps = n.shape[1]
+
+    D = jit(vmap(lambda y, h: conv(y, h, mode=md), in_axes=1, out_axes=1))
+    # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # often too slow for long h
+
+    if c.ndim == 3:
+        N = jit(lambda y, c: y * jnp.exp(1j * (abs(y)**2 @ c)))
+        C = 0
+    elif c.ndim == 4:
+        # MIMO convolution
+        ctaps = c.shape[1]
+        F = jit(lambda p, c: mimoconv(p, c, mode='same', conv=conv))
+        N = lambda y, c: y * jnp.exp(1j * F(abs(y)**2, c))
+        C = ctaps - 1
+    else:
+        raise ValueError('wrong c shape')
+
+    T = h.shape[1] - 1
+    K = h.shape[0]
+    L = n.shape[1] - 1
+
+    if homosteps and scansteps: # homogeneous steps is faster on first jitted run
+    # scan not working on 'SAME' mode due to carry shape change
+        y = xop.scan(lambda x, p: (N(D(x, p[0]), p[1]), 0.), y, (h, c))[0]
+    else:
+        steps = c.shape[0]
+        for i in range(steps):
+            y = D(y, h[i])
+            y = N(y, c[i])
+
+    y = y + (nltriplets(y, n=ntaps//2, m=ntaps//2) * n[None, ...]).sum(axis=(1, 2))
+
+    if homosteps and mode.lower() == 'valid':
+       y = y[K * (T + C + L) // 2: -K * (T + C + L) // 2]
 
     return y * optpowscale
 

@@ -86,12 +86,13 @@ def desc_filter(w, H, ax=None, colors=None, legend=None, phase=True):
         if phase:
             if ax2 is None:
                 ax2 = ax1.twinx()
-            ax2.plot(w, np.unwrap(np.angle(H_)), color=colors[i], alpha=0.4)
+            ax2.plot(w, np.unwrap(np.angle(H_)), '--', color=colors[i], alpha=0.4)
             ax2.set_ylabel('phs.')
     ax1.legend(lgd, loc='best')
 
 
 def lpvssnr(LP, S, label=None, ax=None):
+    S = np.stack(S)
     if ax is None:
         plt.figure()
         ax = plt.gca()
