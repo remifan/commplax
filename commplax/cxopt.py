@@ -196,8 +196,8 @@ def adam(step_size, b1=0.9, b2=0.999, eps=1e-8):
     x, m, v = state
     m = (1 - b1) * g.conj() + b1 * m  # First  moment estimate.
     v = (1 - b2) * (g * g.conj()) + b2 * v  # Second moment estimate.
-    mhat = m / (1 - jnp.asarray(b1, m.dtype) ** (i + 1))  # Bias correction.
-    vhat = v / (1 - jnp.asarray(b2, m.dtype) ** (i + 1))
+    mhat = m / (1 - b1 ** (i + 1))  # Bias correction.
+    vhat = v / (1 - b2 ** (i + 1))
     x = x - step_size(i) * mhat / (jnp.sqrt(vhat) + eps)
     return x, m, v
   def get_params(state):
@@ -232,8 +232,8 @@ def adabound(lr=1e-3, final_lr=1e-3, b1=0.9, b2=0.999, gamma=1e-3, eps=1e-8):
     return x0, m0, v0
   def update(i, g, state):
     x, m, v = state
-    b1pow = jnp.asarray(b1, m.dtype) ** (i + 1)
-    b2pow = jnp.asarray(b2, m.dtype) ** (i + 1)
+    b1pow = b1 ** (i + 1)
+    b2pow = b2 ** (i + 1)
     m = (1 - b1) * g.conj() + b1 * m  # First  moment estimate.
     v = (1 - b2) * (g * g.conj()) + b2 * v  # Second moment estimate.
     lri = sche_lr(i)
@@ -277,8 +277,8 @@ def adabelief(step_size, b1=0.9, b2=0.999, eps=1e-8, rectify=True, sma_threshold
     return x0, m0, s0
   def update(i, g, state):
     x, m, s = state
-    b1pow = jnp.asarray(b1, m.dtype) ** (i + 1)
-    b2pow = jnp.asarray(b2, m.dtype) ** (i + 1)
+    b1pow = b1 ** (i + 1)
+    b2pow = b2 ** (i + 1)
     sma_inf = 2. / (1. - b2) - 1.
     sma = sma_inf - 2. * i * b2pow / (1. - b2pow)
     m = (1. - b1) * g.conj() + b1 * m  # First  moment estimate.
