@@ -321,7 +321,7 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
           beta=0., const=comm.const("16QAM", norm=True), lockgain=False):
     '''
     Enhancements
-    [1] add bias term to handle varying DC component
+    - add bias term to handle varying DC component
     References:
     [1] Mori, Y., Zhang, C. and Kikuchi, K., 2012. Novel configuration of
         finite-impulse-response filters tolerant to carrier-phase fluctuations
@@ -334,6 +334,7 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
     lr_s = cxopt.make_schedule(lr_s)
     lr_b = cxopt.make_schedule(lr_b)
     train = cxopt.make_schedule(train)
+    lockgain = cxopt.make_schedule(lockgain)
 
     def init(taps=31, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
         w0 = mimoinitializer(taps, dims, dtype, mimoinit)
@@ -347,7 +348,7 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
         w, f, s, b, fshat = state
         u, x = inp
 
-        if lockgain:
+        if lockgain(i):
             w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
             w /= (jnp.sqrt(jnp.sum(jnp.abs(w)**2, axis=(1, 2))))[:, None, None] + eps
             f /= jnp.abs(f) + eps

@@ -3,6 +3,7 @@ import numpy as np
 from jax import lax, jit, vmap, numpy as jnp, device_put
 from jax.ops import index, index_add, index_update
 from functools import partial
+from commplax import op
 
 
 def isfloat(x):
@@ -145,6 +146,9 @@ def _conv1d_fft_oa_full(signal, kernel, fft_size):
     return signal
 
 
+frame_shape = op.frame_shape
+
+
 @partial(jit, static_argnums=(2,3))
 def _conv1d_fft_oa(signal, kernel, fft_size, mode):
     if mode.lower() == 'same':
@@ -200,33 +204,6 @@ def _frame(array, flen, fstep, pad_end, pad_constants):
 
 def frame(x, flen, fstep, pad_end=False, pad_constants=0.):
     return _frame(x, flen, fstep, pad_end, pad_constants)
-
-
-def frame_shape(s, flen, fstep, pad_end=False, allowwaste=True):
-    n = s[0]
-    ndim = len(s)
-
-    if ndim < 2:
-        raise ValueError('rank must be atleast 2, got %d instead' % ndim)
-
-    if n < flen:
-        raise ValueError('array length {} < frame length {}'.format(n, flen))
-
-    if flen < fstep:
-        raise ValueError('frame length {} < frame step {}'.format(flen, fstep))
-
-    if pad_end:
-        fnum = -(-n // fstep) # double negatives to round up
-        pad_len = (fnum - 1) * fstep + flen - n
-        n = n + pad_len
-    else:
-        waste = (n - flen) % fstep
-        if not allowwaste and waste != 0:
-            raise ValueError('waste %d' % waste)
-        fnum = 1 + (n - flen) // fstep
-        n = (fnum - 1) * fstep + flen
-
-    return (fnum, flen) + s[1:]
 
 
 def framescaninterp(x, func, flen, fstep, P=1):

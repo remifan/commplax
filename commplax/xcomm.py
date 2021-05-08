@@ -5,8 +5,6 @@ import numpy as np
 from commplax import xop, comm, experimental as exp
 from functools import partial
 
-cpus = jax.devices('cpu')
-
 
 def getpower(x, real=False):
     ''' get signal power '''
@@ -306,13 +304,13 @@ def dimsdelay(x):
     if dims <= 1:
         raise ValueError('input dimension must be at least 2 but given %d' % dims)
     x = device_put(x)
-    return jax.vmap(xop.finddelay, in_axes=(None, -1), out_axes=0)(x[:, 0], x[:, 1:])
+    return jax.vmap(xop.finddelay, in_axes=(None, -1), out_axes=0)(x[:, 0], x[:, 1:])[0]
 
 
 def repalign(y, x, skipfirst=0):
     N = y.shape[0]
     M = x.shape[0]
-    offsets = -jax.vmap(xop.finddelay, in_axes=-1)(y[skipfirst:], x) + skipfirst
+    offsets = -jax.vmap(xop.finddelay, in_axes=-1)(y[skipfirst:], x)[0] + skipfirst
     rep = -(-N // M)
     xrep = jnp.tile(x, [rep, 1])
     z = jax.vmap(jnp.roll, in_axes=-1, out_axes=-1)(xrep, offsets)[:N, :]
@@ -340,6 +338,9 @@ def localfoe(signal, frame_size=16384, frame_step=5000, sps=1, fitkind=None, deg
     '''
     resolution = samplerate / N / 4 / sps (linear interp.)
     '''
+    cpus = jax.devices('cpu')
+
+    # [BUG]: polyfit is buggy in GPU
     y = device_put(signal, cpus[0])
     dims = y.shape[-1]
     fo_local = xop.framescaninterp(y, method, frame_size, frame_step, sps)

@@ -43,6 +43,33 @@ def frame_prepare(x, flen, fstep, pad_end=False, pad_constants=0):
     return x, fnum
 
 
+def frame_shape(s, flen, fstep, pad_end=False, allowwaste=True):
+    n = s[0]
+    ndim = len(s)
+
+    if ndim < 2:
+        raise ValueError('rank must be atleast 2, got %d instead' % ndim)
+
+    if n < flen:
+        raise ValueError('array length {} < frame length {}'.format(n, flen))
+
+    if flen < fstep:
+        raise ValueError('frame length {} < frame step {}'.format(flen, fstep))
+
+    if pad_end:
+        fnum = -(-n // fstep) # double negatives to round up
+        pad_len = (fnum - 1) * fstep + flen - n
+        n = n + pad_len
+    else:
+        waste = (n - flen) % fstep
+        if not allowwaste and waste != 0:
+            raise ValueError('waste %d' % waste)
+        fnum = 1 + (n - flen) // fstep
+        n = (fnum - 1) * fstep + flen
+
+    return (fnum, flen) + s[1:]
+
+
 def frame_gen(x, flen, fstep, pad_end=False, pad_constants=0):
     x, fnum = frame_prepare(x, flen, fstep, pad_end=pad_end, pad_constants=pad_constants)
 
