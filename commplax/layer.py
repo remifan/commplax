@@ -12,7 +12,7 @@ class Layer(NamedTuple):
     name: str
     init: Callable
     apply: Callable
-    vrange: Any
+    trange: Any
 
 
 class LayerInitAns(NamedTuple):
@@ -26,30 +26,37 @@ class LayerApplyAns(NamedTuple):
     state: Any
 
 
-class ValidRange(NamedTuple):
+class TruthRange(NamedTuple):
     begin: int
     end: int
 
     def __and__(self, other):
-        if not isinstance(other, ValidRange):
-            raise ValueError('expected ValidRange input but got {} instead'.format(type(other)))
-        return ValidRange(self.begin + other.begin, self.end + other.end)
+        if not isinstance(other, TruthRange):
+            raise ValueError('expected TruthRange input but got {} instead'.format(type(other)))
+        return TruthRange(max([self.begin, other.begin]), min([self.end, other.end]))
 
-vrange0 = ValidRange(0, 0)
+    def __matmul__(self, other):
+        if not isinstance(other, TruthRange):
+            raise ValueError('expected TruthRange input but got {} instead'.format(type(other)))
+        return TruthRange(self.begin + other.begin, self.end + other.end)
 
-def make_vrangefn(vrange):
-    def _join(vrin=vrange0):
-        return vrin & vrange
+
+trange0 = TruthRange(0, 0)
+
+
+def make_trangefn(trange):
+    def _join(vrin=trange0):
+        return vrin @ trange
     return _join
 
 
 def layer(layer_maker, pure_fn=False, has_state=False):
     @wraps(layer_maker)
     def _layer_maker(*args, name=layer_maker.__name__, **kwargs):
-        init, apply, vrange = (layer_maker(*args, **kwargs) + (vrange0,))[:3]
+        init, apply, trange = (layer_maker(*args, **kwargs) + (trange0,))[:3]
 
-        if not callable(vrange):
-            vrange = make_vrangefn(vrange)
+        if not callable(trange):
+            trange = make_trangefn(trange)
 
         @wraps(init)
         def _init(*args, **kwargs):
@@ -66,19 +73,19 @@ def layer(layer_maker, pure_fn=False, has_state=False):
 
         @partial(jit, static_argnums=3)
         @wraps(apply)
-        def _apply_(weights, inputs, states, vrangein, **kwargs):
+        def _apply_(weights, inputs, states, trangein, **kwargs):
             if pure_fn:
-                outputs = apply(inputs, vrangein, **kwargs)
+                outputs = apply(inputs, trangein, **kwargs)
             elif not has_state:
-                outputs = apply(weights, inputs, vrangein, **kwargs)
+                outputs = apply(weights, inputs, trangein, **kwargs)
             else:
-                outputs, states = apply(weights, inputs, states, vrangein, **kwargs)
+                outputs, states = apply(weights, inputs, states, trangein, **kwargs)
             return LayerApplyAns(outputs, states)
 
-        def _apply(weights, inputs, states, vrangein=vrange0, **kwargs):
-            return _apply_(weights, inputs, states, vrangein, **kwargs)
+        def _apply(weights, inputs, states, trangein=trange0, **kwargs):
+            return _apply_(weights, inputs, states, trangein, **kwargs)
 
-        return Layer(name, _init, _apply, vrange)
+        return Layer(name, _init, _apply, trange)
 
     return _layer_maker
 
@@ -101,9 +108,9 @@ def _assert_tuple_len(t, l):
     assert isinstance(t, tuple) and len(t) == l
 
 
-def _slice_valid(value, vrange):
-    a = vrange[0]
-    b = vrange[1]
+def _slice_valid(value, trange):
+    a = trange[0]
+    b = trange[1]
     if value is not None: assert value.shape[0] > a - b
     value = value if value is None or a == 0 and b == 0 else value[a: b]
     return value
@@ -144,14 +151,75 @@ def _chained_call(fs, init, length=None):
     return ret
 
 
+@layer
+def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s: np.zeros(s), dtype=jnp.complex64, conv=xop.convolve):
+    if rtap is None:
+        rtap = (taps - 1) // 2
+    if mode == 'full':
+        trange = (-rtap, taps - rtap - 1) #TODO: think more about this
+        dlen = taps - 1
+    elif mode == 'same':
+        trange = (0, 0)
+        dlen = 0
+    elif mode == 'valid':
+        trange = (rtap, rtap - taps + 1)
+        dlen = 1 - taps
+    else:
+        raise ValueError('invalid mode {}'.format(mode))
+    trange = TruthRange(trange[0] // sps, trange[1] // sps)
+
+    def init(input_shape):
+        output_shape = (input_shape[0] + dlen,)
+        weights = winit(taps).astype(dtype)
+        assert weights.shape[0] == taps
+        assert output_shape[0] > 0
+        return output_shape, weights
+
+    def apply(weights, inputs, *args, **kwargs):
+        return conv(inputs, weights, mode=mode)
+
+    return init, apply, trange
+
+
+@layer
+def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s, d: np.zeros((s, d, d)), dtype=jnp.complex64, conv=xcomm.mimoconv):
+    if rtap is None:
+        rtap = (taps - 1) // 2
+    if mode == 'full':
+        trange = (-rtap, taps - rtap - 1) #TODO: think more about this
+        dlen = taps - 1
+    elif mode == 'same':
+        trange = (0, 0)
+        dlen = 0
+    elif mode == 'valid':
+        trange = (rtap, rtap - taps + 1)
+        dlen = 1 - taps
+    else:
+        raise ValueError('invalid mode {}'.format(mode))
+    trange = TruthRange(trange[0] // sps, trange[1] // sps)
+
+    def init(input_shape):
+        dims = input_shape[1]
+        output_shape = (input_shape[0] + dlen,) + input_shape[1:]
+        weights = winit(taps, dims).astype(dtype)
+        assert weights.shape[0] == taps
+        assert output_shape[0] > 0
+        return output_shape, weights
+
+    def apply(weights, inputs, *args, **kwargs):
+        return conv(inputs, weights, mode=mode)
+
+    return init, apply, trange
+
+
 @fnlayer
 def FOE(sps=2):
     def init(input_shape):
         return input_shape
 
-    def apply(inputs, vrangein, *args, fo=None, **kwargs):
-        vrangein = (vrangein[0] * sps, vrangein[1] * sps)
-        fo = _slice_valid(fo, vrangein)
+    def apply(inputs, trangein, *args, fo=None, **kwargs):
+        trangein = (trangein[0] * sps, trangein[1] * sps)
+        fo = _slice_valid(fo, trangein)
         return inputs * fo
 
     return init, apply
@@ -161,7 +229,7 @@ def FOE(sps=2):
 def DBP(sr, lspan, nspan, dtaps, lp, sps=2, vspan=None):
     steps = nspan if vspan is None else vspan
     n_invalid = (dtaps - 1) * steps
-    vrange = ValidRange(n_invalid // 2 // sps, -n_invalid // 2 // sps)
+    trange = TruthRange(n_invalid // 2 // sps, -n_invalid // 2 // sps)
 
     def init(input_shape):
         _, wD, wN = comm.dbp_params(sr, lspan, nspan, dtaps, launch_power=lp, virtual_spans=vspan)
@@ -174,13 +242,13 @@ def DBP(sr, lspan, nspan, dtaps, lp, sps=2, vspan=None):
         outputs = xcomm.dbp_timedomain(inputs, wD, wN, mode='valid')
         return outputs
 
-    return init, apply, vrange
+    return init, apply, trange
 
 
 @statlayer
 def MIMO(taps=32, sps=2, train=False, mimo=af.ddlms, mimokwargs={}, mimoinitargs={}):
     mimo_init, mimo_update, mimo_apply = mimo(train=train, **mimokwargs)
-    vrange = ValidRange(*(af.mimozerodelaypads(taps, sps)[0] // sps * np.array([1, -1])).tolist())
+    trange = TruthRange(*(af.mimozerodelaypads(taps, sps)[0] // sps * np.array([1, -1])).tolist())
 
     def init(input_shape):
         dims = input_shape[-1]
@@ -189,8 +257,8 @@ def MIMO(taps=32, sps=2, train=False, mimo=af.ddlms, mimokwargs={}, mimoinitargs
         states = (0, stats)
         return output_shape, (), states
 
-    def apply(weights, inputs, states, vrangein, *args, **kwargs):
-        truth = _slice_valid(kwargs.get('truth'), vrange & vrangein)
+    def apply(weights, inputs, states, trangein, *args, **kwargs):
+        truth = _slice_valid(kwargs.get('truth'), trange @ trangein)
         inputs = xop.frame(inputs, taps, sps)
         i, stats = states
         i, (stats, (params, _)) = af.iterate(mimo_update, i, stats, inputs, truth)
@@ -198,17 +266,24 @@ def MIMO(taps=32, sps=2, train=False, mimo=af.ddlms, mimokwargs={}, mimoinitargs
         states = (i + inputs.shape[0],) + (stats,)
         return outputs, states
 
-    return init, apply, vrange
+    return init, apply, trange
 
 
 @fnlayer
 def Downsample(sps=2):
     def init(input_shape):
         return (input_shape[0] // sps,) + input_shape[1:]
-
     def apply(inputs, *args, **kwargs):
         return inputs[::sps]
+    return init, apply
 
+
+@fnlayer
+def Slice(s):
+    def init(input_shape):
+        return input_shape[0] - s[0] + s[1] if s[1] < 0 else s[1] - s[0]
+    def apply(inputs, *args, **kwargs):
+        return inputs[s[0]:s[1],...]
     return init, apply
 
 
@@ -217,11 +292,11 @@ def MSE():
     def init(input_shape):
         return ()
 
-    def apply(inputs, vrangein, *args, truth=None, **kwargs):
+    def apply(inputs, trangein, *args, truth=None, **kwargs):
         if isinstance(inputs, tuple) and len(inputs) == 2:
             y, x = inputs
         else:
-            y, x = inputs, _slice_valid(truth, vrangein)
+            y, x = inputs, _slice_valid(truth, trangein)
         return jnp.mean(jnp.abs(y - x)**2)
 
     return init, apply
@@ -235,7 +310,12 @@ def elementwise(fun, **fun_kwargs):
     return init, apply
 
 
-Exp = elementwise(jnp.exp)
+@layer
+def ElementwiseFn(fun, winit=lambda *args: (), **fun_kwargs):
+    """Layer that applies a scalar function elementwise on its inputs."""
+    init = lambda input_shape: (input_shape, winit(input_shape))
+    apply = lambda weights, inputs, *args, **kwargs: fun(weights, inputs, **fun_kwargs)
+    return init, apply
 
 
 @fnlayer
@@ -248,11 +328,23 @@ Identity = Identity()
 
 
 @fnlayer
+def FanInStack(axis=-1):
+    def init(input_shape):
+        ax = axis % (len(input_shape[0]) + 1)
+        output_shape = input_shape[0][:ax] + (len(input_shape),) + input_shape[0][ax:]
+        return output_shape
+    def apply(inputs, *args, **kwargs):
+        return jnp.stack(inputs, axis=axis)
+    trange = lambda tranges: reduce(operator.and_, tranges)
+    return init, apply, trange
+
+
+@fnlayer
 def FanInElementwise(fun, **fun_kwargs):
     init = lambda input_shape: input_shape[0]
     apply = lambda inputs, *args, **kwargs: fun(*inputs, **fun_kwargs)
-    vrange = lambda vranges: reduce(operator.and_, vranges)
-    return init, apply, vrange
+    trange = lambda tranges: reduce(operator.and_, tranges)
+    return init, apply, trange
 
 
 @fnlayer
@@ -260,18 +352,37 @@ def FanOut(num):
   """Layer construction function for a fan-out layer."""
   init = lambda input_shape: [input_shape] * num
   apply = lambda inputs, *args, **kwargs: [inputs] * num
-  vrange = lambda vrangein=vrange0: (vrangein,) * num
-  return init, apply, vrange
+  trange = lambda trangein=trange0: (trangein,) * num
+  return init, apply, trange
+
+
+@fnlayer
+def FanOutAxis(axis=-1):
+    def init(input_shape):
+        ax = axis % len(input_shape)
+        output_shape = []
+        for _ in range(input_shape[ax]):
+            output_shape.append(input_shape[:ax] + input_shape[ax+1:])
+        return output_shape
+
+    def apply(inputs, *args, **kwargs):
+        outputs = []
+        for inp in np.moveaxis(inputs, axis, 0):
+            outputs.append(inp)
+        return outputs
+
+    trange = lambda trangein=trange0: (trangein,)
+    return init, apply, trange
 
 
 # Composing layers via combinators
 @statlayer
 def serial(*layers):
     """Combinator for composing layers in serial."""
-    names, inits, applys, vranges = zip(*layers)
+    names, inits, applys, tranges = zip(*layers)
     nlayers = len(layers)
     names = _rename_dupnames(names)
-    vrange = _chained_call(vranges, vrange0)
+    trange = _chained_call(tranges, trange0)
 
     # group sublayers into namedtuple
     WeightsTuple = _wtp(names)
@@ -286,22 +397,24 @@ def serial(*layers):
             states.append(state)
         return input_shape, WeightsTuple(*weights), StateTuple(*states)
 
-    def apply(weights, inputs, states, vrangein, **kwargs):
+    def apply(weights, inputs, states, trangein, **kwargs):
+        assert isinstance(weights, WeightsTuple), "weights mismatch"
+        assert isinstance(states, StateTuple), "state mismatch"
         new_states = []
-        for fun, weight, state, vrange in zip(applys, weights, states, vranges):
-            inputs, state = fun(weight, inputs, state, vrangein, **kwargs)
-            vrangein = vrange(vrangein)
+        for fun, weight, state, trange in zip(applys, weights, states, tranges):
+            inputs, state = fun(weight, inputs, state, trangein, **kwargs)
+            trangein = trange(trangein)
             new_states.append(state)
         return inputs, StateTuple(*new_states)
 
-    return init, apply, vrange
+    return init, apply, trange
 
 
 @statlayer
 def parallel(*layers):
     """Combinator for composing layers in parallel."""
     nlayers = len(layers)
-    names, inits, applys, vranges = zip(*layers)
+    names, inits, applys, tranges = zip(*layers)
     names = _rename_dupnames(names)
 
     # group sublayers into namedtuple
@@ -313,18 +426,29 @@ def parallel(*layers):
         input_shapes, weights, states = tuple(zip(*[init(shape) for init, shape in zip(inits, input_shape)]))
         return InputsTuple(*input_shapes), WeightsTuple(*weights), StateTuple(*states)
 
-    def apply(weights, inputs, states, vrangesin, **kwargs):
-        assert len(vranges) == nlayers
+    def apply(weights, inputs, states, trangesin, **kwargs):
+        if len(trangesin) == 1: trangesin = trangesin * nlayers # broadcast for input_shape dependent layer e.g. FanOutAxis
+        assert len(trangesin) == nlayers
+        assert isinstance(weights, WeightsTuple), "weights mismatch"
+        assert isinstance(states, StateTuple), "state mismatch"
         outputs, states = tuple(zip(*[f(w, x, s, vr, **kwargs) for f, w, x, s, vr in \
-                           zip(applys, weights, inputs, states, vrangesin)]))
+                           zip(applys, weights, inputs, states, trangesin)]))
         return outputs, StateTuple(*states)
 
-    def vrange(vrangesin):
-        vrangeout = []
-        for vr, vri in zip(vranges, vrangesin):
-            vrangeout.append(vr(vri))
-        return tuple(vrangeout)
+    def trange(trangesin):
+        trangeout = []
+        for vr, vri in zip(tranges, trangesin):
+            trangeout.append(vr(vri))
+        return tuple(trangeout)
 
-    return init, apply, vrange
+    return init, apply, trange
+
+
+def shape_dependent(make_layer, *make_layer_args, **make_layer_kwargs):
+    def init(input_shape):
+        return make_layer(input_shape, *make_layer_args, **make_layer_kwargs).init(input_shape)
+    def apply(weights, inputs, *args, **kwargs):
+        return make_layer(inputs.shape, *make_layer_args, **make_layer_kwargs).apply(weights, inputs, *args, **kwargs)
+    return init, apply
 
 
