@@ -30,6 +30,10 @@ def gpufirstbackend():
     return 'gpu' if gpuexists() else 'cpu'
 
 
+def tree_shape(x):
+    return tree_util.tree_map(lambda x: x.shape, x)
+
+
 def tree_like(x, value=None):
     x_flat, x_tree = tree_flatten(x)
     v_flat = (value,) * len(x_flat)
