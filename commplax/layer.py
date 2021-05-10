@@ -40,6 +40,9 @@ class TruthRange(NamedTuple):
             raise ValueError('expected TruthRange input but got {} instead'.format(type(other)))
         return TruthRange(self.begin + other.begin, self.end + other.end)
 
+    def times(self, n: int):
+        return TruthRange(self.begin * n, self.end * n)
+
 
 trange0 = TruthRange(0, 0)
 
@@ -50,9 +53,9 @@ def make_trangefn(trange):
     return _join
 
 
-def layer(layer_maker, pure_fn=False, has_state=False):
+def layer(layer_maker, pure_fn=False, has_state=False, name=None):
     @wraps(layer_maker)
-    def _layer_maker(*args, name=layer_maker.__name__, **kwargs):
+    def _layer_maker(*args, name=layer_maker.__name__ if name is None else name, **kwargs):
         init, apply, trange = (layer_maker(*args, **kwargs) + (trange0,))[:3]
 
         if not callable(trange):
@@ -124,22 +127,26 @@ def _rename_dupnames(names):
         c = cnt[n]
         renames.append(n if c == 0 else n + str(c))
         cnt[n] += 1
+    for n, i in zip(names, range(len(names))):
+        if cnt[n] > 1:
+            renames[i] = renames[i] + '0'
+            cnt[n] = 0
     return renames
 
 
 def _itp(names):
     ''' input_shapes namedtuple '''
-    return namedtuple('InputShape', names)
+    return namedtuple('InputShape', names, defaults=(None,) * len(names))
 
 
 def _stp(names):
     ''' state namedtuple '''
-    return namedtuple('State', names)
+    return namedtuple('State', names, defaults=(None,) * len(names))
 
 
 def _wtp(names):
     ''' weights namedtuple '''
-    return namedtuple('Weights', names)
+    return namedtuple('Weights', names, defaults=(None,) * len(names))
 
 
 def _chained_call(fs, init, length=None):
@@ -152,7 +159,11 @@ def _chained_call(fs, init, length=None):
 
 
 @layer
-def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s: np.zeros(s), dtype=jnp.complex64, conv=xop.convolve):
+def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s: np.zeros(s), dtype=jnp.complex64, conv=xop.fftconvolve):
+    if not callable(winit):
+        winit0 = winit
+        taps = winit0.shape[0]
+        winit = lambda _: winit0
     if rtap is None:
         rtap = (taps - 1) // 2
     if mode == 'full':
@@ -182,7 +193,11 @@ def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s: np.zeros(s),
 
 
 @layer
-def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s, d: np.zeros((s, d, d)), dtype=jnp.complex64, conv=xcomm.mimoconv):
+def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s, d: np.zeros((s, d, d)), dtype=None, conv=xop.fftconvolve):
+    if not callable(winit):
+        winit0 = winit
+        taps = winit0.shape[0]
+        winit = lambda *args: winit0
     if rtap is None:
         rtap = (taps - 1) // 2
     if mode == 'full':
@@ -196,18 +211,21 @@ def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s, d: np.zero
         dlen = 1 - taps
     else:
         raise ValueError('invalid mode {}'.format(mode))
+
     trange = TruthRange(trange[0] // sps, trange[1] // sps)
 
     def init(input_shape):
         dims = input_shape[1]
         output_shape = (input_shape[0] + dlen,) + input_shape[1:]
-        weights = winit(taps, dims).astype(dtype)
+        weights = winit(taps, dims)
+        if dtype is not None:
+            weights = weights.astype(dtype)
         assert weights.shape[0] == taps
         assert output_shape[0] > 0
         return output_shape, weights
 
     def apply(weights, inputs, *args, **kwargs):
-        return conv(inputs, weights, mode=mode)
+        return xcomm.mimoconv(inputs, weights, mode=mode, conv=conv)
 
     return init, apply, trange
 
@@ -246,7 +264,7 @@ def DBP(sr, lspan, nspan, dtaps, lp, sps=2, vspan=None):
 
 
 @statlayer
-def MIMO(taps=32, sps=2, train=False, mimo=af.ddlms, mimokwargs={}, mimoinitargs={}):
+def MIMOAEq(taps=32, sps=2, train=False, mimo=af.ddlms, mimokwargs={}, mimoinitargs={}):
     mimo_init, mimo_update, mimo_apply = mimo(train=train, **mimokwargs)
     trange = TruthRange(*(af.mimozerodelaypads(taps, sps)[0] // sps * np.array([1, -1])).tolist())
 
@@ -279,9 +297,10 @@ def Downsample(sps=2):
 
 
 @fnlayer
-def Slice(s):
+def Slice(s, sps=1):
+    s = (s[0] * sps, s[1] * sps)
     def init(input_shape):
-        return input_shape[0] - s[0] + s[1] if s[1] < 0 else s[1] - s[0]
+        return (input_shape[0] - s[0] + s[1] if s[1] < 0 else s[1] - s[0],) + input_shape[1:]
     def apply(inputs, *args, **kwargs):
         return inputs[s[0]:s[1],...]
     return init, apply
@@ -376,7 +395,6 @@ def FanOutAxis(axis=-1):
 
 
 # Composing layers via combinators
-@statlayer
 def serial(*layers):
     """Combinator for composing layers in serial."""
     names, inits, applys, tranges = zip(*layers)
@@ -398,8 +416,8 @@ def serial(*layers):
         return input_shape, WeightsTuple(*weights), StateTuple(*states)
 
     def apply(weights, inputs, states, trangein, **kwargs):
-        assert isinstance(weights, WeightsTuple), "weights mismatch"
-        assert isinstance(states, StateTuple), "state mismatch"
+        assert weights._fields == WeightsTuple()._fields, "weights mismatch"
+        assert states._fields == StateTuple()._fields, "state mismatch"
         new_states = []
         for fun, weight, state, trange in zip(applys, weights, states, tranges):
             inputs, state = fun(weight, inputs, state, trangein, **kwargs)
@@ -408,9 +426,10 @@ def serial(*layers):
         return inputs, StateTuple(*new_states)
 
     return init, apply, trange
+s = statlayer(serial, name='s') # short alias
+serial = statlayer(serial, name='serial')
 
 
-@statlayer
 def parallel(*layers):
     """Combinator for composing layers in parallel."""
     nlayers = len(layers)
@@ -429,8 +448,8 @@ def parallel(*layers):
     def apply(weights, inputs, states, trangesin, **kwargs):
         if len(trangesin) == 1: trangesin = trangesin * nlayers # broadcast for input_shape dependent layer e.g. FanOutAxis
         assert len(trangesin) == nlayers
-        assert isinstance(weights, WeightsTuple), "weights mismatch"
-        assert isinstance(states, StateTuple), "state mismatch"
+        assert weights._fields == WeightsTuple()._fields, "weights mismatch"
+        assert states._fields == StateTuple()._fields, "state mismatch"
         outputs, states = tuple(zip(*[f(w, x, s, vr, **kwargs) for f, w, x, s, vr in \
                            zip(applys, weights, inputs, states, trangesin)]))
         return outputs, StateTuple(*states)
@@ -442,6 +461,8 @@ def parallel(*layers):
         return tuple(trangeout)
 
     return init, apply, trange
+p = statlayer(parallel, name='p') # short alias
+parallel = statlayer(parallel, name='parallel')
 
 
 def shape_dependent(make_layer, *make_layer_args, **make_layer_kwargs):

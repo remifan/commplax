@@ -88,7 +88,6 @@ def dbp_params(
 
 
 def mimoconv(y, h, mode='same', conv=xop.fftconvolve):
-    conv = jnp.convolve
     dims = y.shape[-1]
     y = jnp.tile(y, (1, dims))
     h = jnp.reshape(h, (h.shape[0], dims * dims))

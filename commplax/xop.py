@@ -73,16 +73,16 @@ def _largest_prime_factor(n):
     return n
 
 
-def _fft_size_factor(x, gpf):
+def _fft_size_factor(x, gpf, cond=lambda _: True):
     '''calculates the integer number exceeding parameter x and containing
-    only the prime factors not exceeding gpf.
+    only the prime factors not exceeding gpf, and statisfy extra condition (optional)
     '''
     if x <= 0:
         raise ValueError("The input value for factor is not positive.")
     x = int(x) + 1
 
     if gpf > 1:
-        while(_largest_prime_factor(x) > gpf):
+        while(_largest_prime_factor(x) > gpf or not cond(x)):
             x += 1
 
     return x
@@ -107,6 +107,19 @@ def _conv1d_fft_oa_same(signal, kernel, fft_size):
     signal = _conv1d_fft_oa_full(signal, kernel, fft_size)
 
     signal = signal[(kernel_length - 1) // 2 : -(kernel_length // 2)]
+
+    return signal
+
+
+def _conv1d_fft_oa_valid(signal, kernel, fft_size):
+    signal = device_put(signal)
+    kernel = device_put(kernel)
+
+    kernel_length = kernel.shape[-1] # kernel/filter length
+
+    signal = _conv1d_fft_oa_full(signal, kernel, fft_size)
+
+    signal = signal[kernel_length - 1: signal.shape[-1] - kernel_length + 1]
 
     return signal
 
@@ -151,13 +164,19 @@ frame_shape = op.frame_shape
 
 @partial(jit, static_argnums=(2,3))
 def _conv1d_fft_oa(signal, kernel, fft_size, mode):
-    if mode.lower() == 'same':
-        return _conv1d_fft_oa_same(signal, kernel, fft_size)
+    if mode == 'same':
+        signal = _conv1d_fft_oa_same(signal, kernel, fft_size)
+    elif mode == 'full':
+        signal = _conv1d_fft_oa_full(signal, kernel, fft_size)
+    elif mode == 'valid':
+        signal = _conv1d_fft_oa_valid(signal, kernel, fft_size)
     else:
-        return _conv1d_fft_oa_full(signal, kernel, fft_size)
+        raise ValueError('invalid mode %s' % mode)
+    return signal.real if isfloat(signal) and isfloat(kernel) else signal
 
 
 def conv1d_fft_oa(signal, kernel, fft_size=None, oa_factor=10, mode='SAME'):
+    mode = mode.lower()
     if fft_size is None:
         signal_length = signal.shape[-1]
         kernel_length = kernel.shape[-1]
@@ -300,8 +319,8 @@ def finddelay(x, y):
 
 
 def fftconvolve(x, h, mode='full'):
-    x = jnp.atleast_1d(x)
-    h = jnp.atleast_1d(h)
+    x = jnp.atleast_1d(x) * 1.
+    h = jnp.atleast_1d(h) * 1.
 
     mode = mode.lower()
 
@@ -329,6 +348,7 @@ def fftconvolve(x, h, mode='full'):
 def _fftconvolve(x, h):
     fft = jnp.fft.fft
     ifft = jnp.fft.ifft
+
     N = x.shape[0]
     M = h.shape[0]
     out_length = N + M -1
