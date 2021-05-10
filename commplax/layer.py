@@ -2,17 +2,17 @@ import operator
 import numpy as np
 import jax
 from functools import partial, wraps, reduce
-from jax import numpy as jnp, jit, device_put
+from jax import numpy as jnp, jit, device_put, tree_util
 from typing import NamedTuple, Callable, Tuple, Any
 from collections import namedtuple
-from commplax import comm, xcomm, xop, adaptive_filter as af
+from commplax import util, comm, xcomm, xop, adaptive_filter as af
 
 
 class Layer(NamedTuple):
     name: str
     init: Callable
     apply: Callable
-    trange: Any
+    truth_range: Any
 
 
 class LayerInitAns(NamedTuple):
@@ -44,11 +44,13 @@ class TruthRange(NamedTuple):
         return TruthRange(self.begin * n, self.end * n)
 
 
-trange0 = TruthRange(0, 0)
+TRANGE0 = TruthRange(0, 0)
+EMPTY_WEIGHTS = ()
+EMPTY_STATE = ()
 
 
 def make_trangefn(trange):
-    def _join(vrin=trange0):
+    def _join(vrin=TRANGE0):
         return vrin @ trange
     return _join
 
@@ -56,7 +58,7 @@ def make_trangefn(trange):
 def layer(layer_maker, pure_fn=False, has_state=False, name=None):
     @wraps(layer_maker)
     def _layer_maker(*args, name=layer_maker.__name__ if name is None else name, **kwargs):
-        init, apply, trange = (layer_maker(*args, **kwargs) + (trange0,))[:3]
+        init, apply, trange = (layer_maker(*args, **kwargs) + (TRANGE0,))[:3]
 
         if not callable(trange):
             trange = make_trangefn(trange)
@@ -65,9 +67,9 @@ def layer(layer_maker, pure_fn=False, has_state=False, name=None):
         def _init(*args, **kwargs):
             ret = init(*args, **kwargs)
             if pure_fn:
-                ret = (ret, (), ())
+                ret = (ret, EMPTY_WEIGHTS, EMPTY_STATE)
             elif not has_state:
-                ret = ret + ((),)
+                ret = ret + (EMPTY_STATE,)
             else:
                 pass
             _assert_tuple_len(ret, 3)
@@ -85,7 +87,7 @@ def layer(layer_maker, pure_fn=False, has_state=False, name=None):
                 outputs, states = apply(weights, inputs, states, trangein, **kwargs)
             return LayerApplyAns(outputs, states)
 
-        def _apply(weights, inputs, states, trangein=trange0, **kwargs):
+        def _apply(weights, inputs, states, trangein=TRANGE0, **kwargs):
             return _apply_(weights, inputs, states, trangein, **kwargs)
 
         return Layer(name, _init, _apply, trange)
@@ -105,6 +107,21 @@ def grad(layer, has_aux=True, **kwargs):
 def value_and_grad(layer, has_aux=True, **kwargs):
     assert isinstance(layer, Layer)
     return jax.value_and_grad(layer.apply, has_aux=has_aux, **kwargs)
+
+
+def apply_trainable_grad(g, trainable_dict):
+    if trainable_dict is not None:
+        assert isinstance(trainable_dict, dict)
+        t_flat = tuple(util.dict_flatten(trainable_dict).values())
+        g_flat, g_tree = tree_util.tree_flatten(g)
+        assert len(g_flat) == len(t_flat)
+        g_flat = tuple([gi if ti else gi * 0. for gi, ti in zip(g_flat, t_flat)])
+        g = tree_util.tree_unflatten(g_tree, g_flat)
+    return g
+
+
+def weights_dict(w, val=None):
+    return util.unpack_namedtuple(util.tree_like(w, val))
 
 
 def _assert_tuple_len(t, l):
@@ -371,7 +388,7 @@ def FanOut(num):
   """Layer construction function for a fan-out layer."""
   init = lambda input_shape: [input_shape] * num
   apply = lambda inputs, *args, **kwargs: [inputs] * num
-  trange = lambda trangein=trange0: (trangein,) * num
+  trange = lambda trangein=TRANGE0: (trangein,) * num
   return init, apply, trange
 
 
@@ -390,7 +407,7 @@ def FanOutAxis(axis=-1):
             outputs.append(inp)
         return outputs
 
-    trange = lambda trangein=trange0: (trangein,)
+    trange = lambda trangein=TRANGE0: (trangein,)
     return init, apply, trange
 
 
@@ -400,7 +417,7 @@ def serial(*layers):
     names, inits, applys, tranges = zip(*layers)
     nlayers = len(layers)
     names = _rename_dupnames(names)
-    trange = _chained_call(tranges, trange0)
+    trange = _chained_call(tranges, TRANGE0)
 
     # group sublayers into namedtuple
     WeightsTuple = _wtp(names)
