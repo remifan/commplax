@@ -6,19 +6,19 @@ from commplax import xop, comm, experimental as exp
 from functools import partial
 
 
-def getpower(x, real=False):
+def getpower(x, axis=0, real=False):
     ''' get signal power '''
-    return jnp.mean(x.real**2, axis=0) + jnp.array(1j) * jnp.mean(x.imag**2, axis=0) \
-        if real else jnp.mean(abs(x)**2, axis=0)
+    return jnp.mean(x.real**2, axis=axis) + jnp.array(1j) * jnp.mean(x.imag**2, axis=axis) \
+        if real else jnp.mean(jnp.abs(x)**2, axis=axis)
 
 
-def normpower(x, real=False):
+def normpower(x, axis=0, real=False):
     ''' normalize signal power '''
     if real:
-        p = getpower(x, real=True)
+        p = getpower(x, axis=axis, real=True)
         return x.real / jnp.sqrt(p.real) + jnp.array(1j) * x.imag / jnp.sqrt(p.imag)
     else:
-        return x / jnp.sqrt(getpower(x))
+        return x / jnp.sqrt(getpower(x, axis=axis))
 
 
 def qamscale(modformat):

@@ -348,11 +348,21 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
         w, f, s, b, fshat = state
         u, x = inp
 
-        if lockgain(i):
-            w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
-            w /= (jnp.sqrt(jnp.sum(jnp.abs(w)**2, axis=(1, 2))))[:, None, None] + eps
-            f /= jnp.abs(f) + eps
-            s /= jnp.abs(s) + eps
+        # if lockgain(i): # for scalar lockgain only
+        #     w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
+        #     w /= (jnp.sqrt(jnp.sum(jnp.abs(w)**2, axis=(1, 2))))[:, None, None] + eps
+        #     f /= jnp.abs(f) + eps
+        #     s /= jnp.abs(s) + eps
+
+        w = jnp.where(lockgain(i),
+                      w / ((jnp.sqrt(jnp.sum(jnp.abs(w * (jnp.abs(f) * jnp.abs(s))[:, None, None])**2, axis=(1, 2))))[:, None, None] + eps),
+                      w)
+        f = jnp.where(lockgain(i),
+                      f / (jnp.abs(f) + eps),
+                      f)
+        s = jnp.where(lockgain(i),
+                      s / (jnp.abs(s) + eps),
+                      s)
 
         v = mimo(w, u)
         k = v * f

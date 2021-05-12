@@ -104,7 +104,7 @@ def qammod(x, L):
 
     d = qamgraydec_int(x, L)
 
-    return C[d//M, d%M]
+    return C[d // M, d % M]
 
 
 def qamdemod(x, L):
@@ -276,10 +276,16 @@ def normpower(x, real=False):
         return x / np.sqrt(getpower(x))
 
 
-def delta(taps, dims=2, dtype=np.complex64):
-    mf = np.zeros((taps, dims), dtype=dtype)
-    mf[(taps - 1) // 2, :] = 1.
-    return mf
+def delta(taps, dims=None, dtype=np.complex64):
+    mf = np.zeros(taps, dtype=dtype)
+    mf[(taps - 1) // 2] = 1.
+    return mf if dims is None else np.tile(mf[:, None], dims)
+
+
+def gaussian(n=11, sigma=1, dims=None, dtype=np.complex64):
+    r = np.arange(-int(n / 2), int(n / 2) + 1) if n % 2 else np.linspace(-int(n / 2) + 0.5, int(n / 2) - 0.5, n)
+    w = np.array([1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-float(x)**2/(2 * sigma**2)) for x in r]).astype(dtype)
+    return w if dims is None else np.tile(w[:, None], dims)
 
 
 def qamscale(modformat):
@@ -426,13 +432,21 @@ def align_periodic(y, x, begin=0, last=2000, b=0.5):
     return z, d
 
 
-def qamqot(y, x, count_dim=True, count_total=True, L=None, checktruthscale=True):
-    if checktruthscale:
-        ux = np.unique(x)
-        powdiff = abs(getpower(ux) - getpower(const(str(len(ux)) + 'QAM')))
-        if  powdiff > 1e-4:
-            #TODO add warning colors
-            print("truth QAM data is not properly scaled to its canonical form, scale = %.5f" % powdiff)
+def qamqot(y, x, count_dim=True, count_total=True, L=None, eval_range=(0, 0), scale=1):
+    #if checktruthscale:
+    #    assert L is not None
+    #    ux = np.unique(x)
+    #    powdiff = abs(getpower(ux) - getpower(const(str(L) + 'QAM')))
+    #    if  powdiff > 1e-4:
+    #        #TODO add warning colors
+    #        print("truth QAM data is not properly scaled to its canonical form, scale = %.5f" % powdiff)
+
+
+    assert y.shape[0] == x.shape[0]
+    y = y[eval_range[0]: y.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
+    x = x[eval_range[0]: x.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
+
+    x = x.real.astype(int) + 1j * x.imag.astype(int)
 
     y = shape_signal(y)
     x = shape_signal(x)
@@ -523,8 +537,11 @@ def corr_local(y, x, frame_size=10000, L=None):
     return qot_local_ip
 
 
-def snrstat(xhat, x, frame_size=10000, L=None):
-    snr_local = qamqot_local(xhat, x, frame_size, L)['SNR'][:, :2]
+def snrstat(y, x, frame_size=10000, L=None, eval_range=(0, 0), scale=1):
+    assert y.shape[0] == x.shape[0]
+    y = y[eval_range[0]: y.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
+    x = x[eval_range[0]: x.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
+    snr_local = qamqot_local(y, x, frame_size, L)['SNR'][:, :2]
     sl_mean = np.mean(snr_local, axis=0)
     sl_std = np.std(snr_local, axis=0)
     sl_max = np.max(snr_local, axis=0)
