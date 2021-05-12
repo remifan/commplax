@@ -1,11 +1,6 @@
 import jax
-from jax._src.util import partial, safe_zip, safe_map, unzip2
-from jax import tree_util
-from jax.tree_util import (tree_map, tree_flatten, tree_unflatten,
-                           register_pytree_node)
-
-map = safe_map
-zip = safe_zip
+from jax.tree_util import tree_map, tree_flatten, tree_unflatten
+from collections import namedtuple as _namedtuple
 
 
 def getdev(x):
@@ -31,7 +26,7 @@ def gpufirstbackend():
 
 
 def tree_shape(x):
-    return tree_util.tree_map(lambda x: x.shape, x)
+    return tree_map(lambda x: x.shape, x)
 
 
 def tree_like(x, value=None):
@@ -61,9 +56,6 @@ def tree_update_ignorenoneleaves(x, y):
     return z_tree
 
 
-tree_update = tree_update_ignorenoneleaves
-
-
 def isnamedtupleinstance(x):
     _type = type(x)
     bases = _type.__bases__
@@ -75,17 +67,17 @@ def isnamedtupleinstance(x):
     return all(type(i)==str for i in fields)
 
 
-def unpack_namedtuple(obj):
-    if isinstance(obj, dict):
-        return {key: unpack_namedtuple(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [unpack_namedtuple(value) for value in obj]
-    elif isnamedtupleinstance(obj):
-        return {key: unpack_namedtuple(value) for key, value in obj._asdict().items() if not (isinstance(value, tuple) and len(value) == 0)}
-    elif isinstance(obj, tuple):
-        return tuple(unpack_namedtuple(value) for value in obj)
-    else:
-        return obj
+def tree_homoreplace(tree, subtree, value):
+    subtree_def = tree_flatten(subtree)[1]
+    is_subtree = lambda x: tree_flatten(x)[1] == subtree_def
+    return tree_map(lambda x: tree_map(lambda _: value, x) if is_subtree(x) else x,
+                    tree,
+                    is_leaf=is_subtree)
+
+
+def namedtuple(name, keys, *args, **kwargs):
+    ''' patch collections.namedtuple with extra pytree utilites '''
+    return type(name, (_namedtuple(name, keys, *args, **kwargs),), {'apply': tree_homoreplace})
 
 
 def dict_flatten(d, parent_key='', sep='_'):

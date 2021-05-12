@@ -2,10 +2,11 @@ import operator
 import numpy as np
 import jax
 from functools import partial, wraps, reduce
-from jax import numpy as jnp, jit, device_put, tree_util
+from jax import numpy as jnp, jit, random, device_put, tree_util
 from typing import NamedTuple, Callable, Tuple, Any
-from collections import namedtuple
+from commplax.util import namedtuple
 from commplax import util, comm, xcomm, xop, adaptive_filter as af
+from jax.nn.initializers import ones, zeros
 
 
 class Layer(NamedTuple):
@@ -50,9 +51,9 @@ EMPTY_STATE = ()
 
 
 def make_trangefn(trange):
-    def _join(vrin=TRANGE0):
+    def _propogate(vrin=TRANGE0):
         return vrin @ trange
-    return _join
+    return _propogate
 
 
 def layer(layer_maker, pure_fn=False, has_state=False, name=None):
@@ -109,19 +110,14 @@ def value_and_grad(layer, has_aux=True, **kwargs):
     return jax.value_and_grad(layer.apply, has_aux=has_aux, **kwargs)
 
 
-def apply_trainable_grad(g, trainable_dict):
-    if trainable_dict is not None:
-        assert isinstance(trainable_dict, dict)
-        t_flat = tuple(util.dict_flatten(trainable_dict).values())
-        g_flat, g_tree = tree_util.tree_flatten(g)
-        assert len(g_flat) == len(t_flat)
-        g_flat = tuple([gi if ti else gi * 0. for gi, ti in zip(g_flat, t_flat)])
-        g = tree_util.tree_unflatten(g_tree, g_flat)
-    return g
+def apply_trainable_grad(g_tree, b_tree):
+    g_tree_def, b_tree_def = tree_util.tree_structure(g_tree), tree_util.tree_structure(b_tree)
+    assert g_tree_def == b_tree_def, "gradients and trainable have mismatched tree structure"
+    return tree_util.tree_map(lambda g_leaf, b_leaf: g_leaf if b_leaf else g_leaf * 0, g_tree, b_tree)
 
 
-def weights_dict(w, val=None):
-    return util.unpack_namedtuple(util.tree_like(w, val))
+def trainable(weights, invert=False):
+    return tree_util.tree_map(lambda _: not invert, weights)
 
 
 def _assert_tuple_len(t, l):
@@ -176,11 +172,11 @@ def _chained_call(fs, init, length=None):
 
 
 @layer
-def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s: np.zeros(s), dtype=jnp.complex64, conv=xop.fftconvolve):
+def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda k, s: np.zeros(s), dtype=jnp.complex64, conv=xop.fftconvolve):
     if not callable(winit):
         winit0 = winit
         taps = winit0.shape[0]
-        winit = lambda _: winit0
+        winit = lambda *args: winit0
     if rtap is None:
         rtap = (taps - 1) // 2
     if mode == 'full':
@@ -196,9 +192,9 @@ def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s: np.zeros(s),
         raise ValueError('invalid mode {}'.format(mode))
     trange = TruthRange(trange[0] // sps, trange[1] // sps)
 
-    def init(input_shape):
+    def init(rng, input_shape):
         output_shape = (input_shape[0] + dlen,)
-        weights = winit(taps).astype(dtype)
+        weights = winit(rng, taps).astype(dtype)
         assert weights.shape[0] == taps
         assert output_shape[0] > 0
         return output_shape, weights
@@ -210,7 +206,7 @@ def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s: np.zeros(s),
 
 
 @layer
-def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s, d: np.zeros((s, d, d)), dtype=None, conv=xop.fftconvolve):
+def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda k, s, d: np.zeros((s, d, d)), dtype=None, conv=xop.fftconvolve):
     if not callable(winit):
         winit0 = winit
         taps = winit0.shape[0]
@@ -231,10 +227,10 @@ def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s, d: np.zero
 
     trange = TruthRange(trange[0] // sps, trange[1] // sps)
 
-    def init(input_shape):
+    def init(rng, input_shape):
         dims = input_shape[1]
         output_shape = (input_shape[0] + dlen,) + input_shape[1:]
-        weights = winit(taps, dims)
+        weights = winit(rng, taps, dims)
         if dtype is not None:
             weights = weights.astype(dtype)
         assert weights.shape[0] == taps
@@ -249,7 +245,7 @@ def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda s, d: np.zero
 
 @fnlayer
 def FOE(sps=2):
-    def init(input_shape):
+    def init(rng, input_shape):
         return input_shape
 
     def apply(inputs, trangein, *args, fo=None, **kwargs):
@@ -260,24 +256,24 @@ def FOE(sps=2):
     return init, apply
 
 
-@layer
-def DBP(sr, lspan, nspan, dtaps, lp, sps=2, vspan=None):
-    steps = nspan if vspan is None else vspan
-    n_invalid = (dtaps - 1) * steps
-    trange = TruthRange(n_invalid // 2 // sps, -n_invalid // 2 // sps)
+# @layer
+# def DBP(sr, lspan, nspan, dtaps, lp, sps=2, vspan=None):
+#     steps = nspan if vspan is None else vspan
+#     n_invalid = (dtaps - 1) * steps
+#     trange = TruthRange(n_invalid // 2 // sps, -n_invalid // 2 // sps)
 
-    def init(input_shape):
-        _, wD, wN = comm.dbp_params(sr, lspan, nspan, dtaps, launch_power=lp, virtual_spans=vspan)
-        output_shape = (input_shape[0] - n_invalid,) + input_shape[1:]
-        weights = (wD, wN * 0.2)
-        return output_shape, weights
+#     def init(input_shape):
+#         _, wD, wN = comm.dbp_params(sr, lspan, nspan, dtaps, launch_power=lp, virtual_spans=vspan)
+#         output_shape = (input_shape[0] - n_invalid,) + input_shape[1:]
+#         weights = (wD, wN * 0.2)
+#         return output_shape, weights
 
-    def apply(weights, inputs, *args, **kwargs):
-        wD, wN = weights
-        outputs = xcomm.dbp_timedomain(inputs, wD, wN, mode='valid')
-        return outputs
+#     def apply(weights, inputs, *args, **kwargs):
+#         wD, wN = weights
+#         outputs = xcomm.dbp_timedomain(inputs, wD, wN, mode='valid')
+#         return outputs
 
-    return init, apply, trange
+#     return init, apply, trange
 
 
 @statlayer
@@ -285,7 +281,7 @@ def MIMOAEq(taps=32, sps=2, train=False, mimo=af.ddlms, mimokwargs={}, mimoinita
     mimo_init, mimo_update, mimo_apply = mimo(train=train, **mimokwargs)
     trange = TruthRange(*(af.mimozerodelaypads(taps, sps)[0] // sps * np.array([1, -1])).tolist())
 
-    def init(input_shape):
+    def init(rng, input_shape):
         dims = input_shape[-1]
         stats = mimo_init(dims=dims, taps=taps, **mimoinitargs)
         output_shape = (xop.frame_shape(input_shape, taps, sps, allowwaste=True)[0], dims)
@@ -306,7 +302,7 @@ def MIMOAEq(taps=32, sps=2, train=False, mimo=af.ddlms, mimokwargs={}, mimoinita
 
 @fnlayer
 def Downsample(sps=2):
-    def init(input_shape):
+    def init(rng, input_shape):
         return (input_shape[0] // sps,) + input_shape[1:]
     def apply(inputs, *args, **kwargs):
         return inputs[::sps]
@@ -314,18 +310,17 @@ def Downsample(sps=2):
 
 
 @fnlayer
-def Slice(s, sps=1):
-    s = (s[0] * sps, s[1] * sps)
-    def init(input_shape):
-        return (input_shape[0] - s[0] + s[1] if s[1] < 0 else s[1] - s[0],) + input_shape[1:]
+def Slice(s):
+    def init(rng, input_shape):
+        return (input_shape[0] - s[0] + s[1] if s[1] <= 0 else s[1] - s[0],) + input_shape[1:]
     def apply(inputs, *args, **kwargs):
-        return inputs[s[0]:s[1],...]
+        return inputs[s[0]: s[1] if s[1] < 0 else inputs.shape[0] - s[1], ...]
     return init, apply
 
 
 @fnlayer
 def MSE():
-    def init(input_shape):
+    def init(rng, input_shape):
         return ()
 
     def apply(inputs, trangein, *args, truth=None, **kwargs):
@@ -338,10 +333,33 @@ def MSE():
     return init, apply
 
 
+@layer
+def BatchNorm(axis=(0,), epsilon=1e-5, center=False, scale=False,
+              beta_init=zeros, gamma_init=ones, normalizer=jax.nn.normalize):
+    """Layer construction function for a batch normalization layer."""
+    _beta_init = lambda rng, shape: beta_init(rng, shape) if center else ()
+    _gamma_init = lambda rng, shape: gamma_init(rng, shape) if scale else ()
+    axis = (axis,) if jnp.isscalar(axis) else axis
+    def init(rng, input_shape):
+        shape = tuple(d for i, d in enumerate(input_shape) if i not in axis)
+        k1, k2 = random.split(rng)
+        beta, gamma = _beta_init(k1, shape), _gamma_init(k2, shape)
+        return input_shape, (beta, gamma)
+    def apply(weights, x, *args, **kwargs):
+        beta, gamma = weights
+        ed = tuple(None if i in axis else slice(None) for i in range(jnp.ndim(x)))
+        z = normalizer(x, axis, epsilon=epsilon)
+        if center and scale: return gamma[ed] * z + beta[ed]
+        if center: return z + beta[ed]
+        if scale: return gamma[ed] * z
+        return z
+    return init, apply
+
+
 @fnlayer
 def elementwise(fun, **fun_kwargs):
     """Layer that applies a scalar function elementwise on its inputs."""
-    init = lambda input_shape: input_shape
+    init = lambda rng, input_shape: input_shape
     apply = lambda inputs, *args, **kwargs: fun(inputs, **fun_kwargs)
     return init, apply
 
@@ -349,7 +367,7 @@ def elementwise(fun, **fun_kwargs):
 @layer
 def ElementwiseFn(fun, winit=lambda *args: (), **fun_kwargs):
     """Layer that applies a scalar function elementwise on its inputs."""
-    init = lambda input_shape: (input_shape, winit(input_shape))
+    init = lambda rng, input_shape: (input_shape, winit(input_shape))
     apply = lambda weights, inputs, *args, **kwargs: fun(weights, inputs, **fun_kwargs)
     return init, apply
 
@@ -357,7 +375,7 @@ def ElementwiseFn(fun, winit=lambda *args: (), **fun_kwargs):
 @fnlayer
 def Identity():
     """Layer construction function for an identity layer."""
-    init = lambda input_shape: input_shape
+    init = lambda rng, input_shape: input_shape
     apply = lambda inputs, *args, **kwargs: inputs
     return init, apply
 Identity = Identity()
@@ -365,7 +383,7 @@ Identity = Identity()
 
 @fnlayer
 def FanInStack(axis=-1):
-    def init(input_shape):
+    def init(rng, input_shape):
         ax = axis % (len(input_shape[0]) + 1)
         output_shape = input_shape[0][:ax] + (len(input_shape),) + input_shape[0][ax:]
         return output_shape
@@ -377,7 +395,7 @@ def FanInStack(axis=-1):
 
 @fnlayer
 def FanInElementwise(fun, **fun_kwargs):
-    init = lambda input_shape: input_shape[0]
+    init = lambda rng, input_shape: input_shape[0]
     apply = lambda inputs, *args, **kwargs: fun(*inputs, **fun_kwargs)
     trange = lambda tranges: reduce(operator.and_, tranges)
     return init, apply, trange
@@ -386,7 +404,7 @@ def FanInElementwise(fun, **fun_kwargs):
 @fnlayer
 def FanOut(num):
   """Layer construction function for a fan-out layer."""
-  init = lambda input_shape: [input_shape] * num
+  init = lambda rng, input_shape: [input_shape] * num
   apply = lambda inputs, *args, **kwargs: [inputs] * num
   trange = lambda trangein=TRANGE0: (trangein,) * num
   return init, apply, trange
@@ -394,7 +412,7 @@ def FanOut(num):
 
 @fnlayer
 def FanOutAxis(axis=-1):
-    def init(input_shape):
+    def init(rng, input_shape):
         ax = axis % len(input_shape)
         output_shape = []
         for _ in range(input_shape[ax]):
@@ -423,11 +441,12 @@ def serial(*layers):
     WeightsTuple = _wtp(names)
     StateTuple = _stp(names)
 
-    def init(input_shape):
+    def init(rng, input_shape):
         weights = []
         states = []
         for init in inits:
-            input_shape, weight, state = init(input_shape)
+            rng, layer_rng = random.split(rng)
+            input_shape, weight, state = init(layer_rng, input_shape)
             weights.append(weight)
             states.append(state)
         return input_shape, WeightsTuple(*weights), StateTuple(*states)
@@ -435,9 +454,11 @@ def serial(*layers):
     def apply(weights, inputs, states, trangein, **kwargs):
         assert weights._fields == WeightsTuple()._fields, "weights mismatch"
         assert states._fields == StateTuple()._fields, "state mismatch"
+        rng = kwargs.pop('rng', None)
+        rngs = random.split(rng, nlayers) if rng is not None else (None,) * nlayers
         new_states = []
-        for fun, weight, state, trange in zip(applys, weights, states, tranges):
-            inputs, state = fun(weight, inputs, state, trangein, **kwargs)
+        for fun, weight, state, trange, rng in zip(applys, weights, states, tranges, rngs):
+            inputs, state = fun(weight, inputs, state, trangein, rng=rng, **kwargs)
             trangein = trange(trangein)
             new_states.append(state)
         return inputs, StateTuple(*new_states)
@@ -458,8 +479,9 @@ def parallel(*layers):
     WeightsTuple = _wtp(names)
     StateTuple = _stp(names)
 
-    def init(input_shape):
-        input_shapes, weights, states = tuple(zip(*[init(shape) for init, shape in zip(inits, input_shape)]))
+    def init(rng, input_shape):
+        rngs = random.split(rng, nlayers)
+        input_shapes, weights, states = tuple(zip(*[init(rng, shape) for init, rng, shape in zip(inits, rngs, input_shape)]))
         return InputsTuple(*input_shapes), WeightsTuple(*weights), StateTuple(*states)
 
     def apply(weights, inputs, states, trangesin, **kwargs):
@@ -467,8 +489,10 @@ def parallel(*layers):
         assert len(trangesin) == nlayers
         assert weights._fields == WeightsTuple()._fields, "weights mismatch"
         assert states._fields == StateTuple()._fields, "state mismatch"
-        outputs, states = tuple(zip(*[f(w, x, s, vr, **kwargs) for f, w, x, s, vr in \
-                           zip(applys, weights, inputs, states, trangesin)]))
+        rng = kwargs.pop('rng', None)
+        rngs = random.split(rng, nlayers) if rng is not None else (None,) * nlayers
+        outputs, states = tuple(zip(*[f(w, x, s, vr, rng=r, **kwargs) for f, w, x, s, vr, r in \
+                           zip(applys, weights, inputs, states, trangesin, rngs)]))
         return outputs, StateTuple(*states)
 
     def trange(trangesin):
@@ -482,11 +506,14 @@ p = statlayer(parallel, name='p') # short alias
 parallel = statlayer(parallel, name='parallel')
 
 
-def shape_dependent(make_layer, *make_layer_args, **make_layer_kwargs):
-    def init(input_shape):
-        return make_layer(input_shape, *make_layer_args, **make_layer_kwargs).init(input_shape)
-    def apply(weights, inputs, *args, **kwargs):
-        return make_layer(inputs.shape, *make_layer_args, **make_layer_kwargs).apply(weights, inputs, *args, **kwargs)
-    return init, apply
+def shape_dependent(make_layer):
+  name = make_layer().name
+  def init(rng, input_shape, *args, **kwargs):
+    return make_layer(input_shape).init(rng, input_shape, *args, **kwargs)
+  def apply(weights, inputs, states, trangein,  **kwargs):
+    return make_layer(inputs.shape).apply(weights, inputs, states, trangein, **kwargs)
+  def trange(trangein):
+    return make_layer().trange(trangein)
+  return name, init, apply, trange
 
 
