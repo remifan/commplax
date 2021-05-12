@@ -301,15 +301,6 @@ def MIMOAEq(taps=32, sps=2, train=False, mimo=af.ddlms, mimokwargs={}, mimoinita
 
 
 @fnlayer
-def Downsample(sps=2):
-    def init(rng, input_shape):
-        return (input_shape[0] // sps,) + input_shape[1:]
-    def apply(inputs, *args, **kwargs):
-        return inputs[::sps]
-    return init, apply
-
-
-@fnlayer
 def Slice(s):
     def init(rng, input_shape):
         return (input_shape[0] - s[0] + s[1] if s[1] <= 0 else s[1] - s[0],) + input_shape[1:]

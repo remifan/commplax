@@ -91,15 +91,19 @@ def desc_filter(w, H, ax=None, colors=None, legend=None, phase=True):
     ax1.legend(lgd, loc='best')
 
 
-def lpvssnr(LP, S, label=None, ax=None):
+def lpvssnr(LP, S, label=None, ax=None, show_std=True, show_ex=True):
     S = np.stack(S)
     if ax is None:
         plt.figure()
         ax = plt.gca()
     if S.ndim == 3:
         S = S.mean(axis=-1)
-    ax.errorbar(LP, S[:, 0], yerr=S[:, 2:].T, label=label, fmt='-o', capsize=3)
-    ax.fill_between(LP, S[:, 0] - S[:, 1], S[:, 0] + S[:, 1], alpha=0.2)
+    if show_ex:
+        ax.errorbar(LP, S[:, 0], yerr=S[:, 2:].T, label=label, fmt='-o', capsize=3)
+    else:
+        ax.plot(LP, S[:, 0], '-o', label=label)
+    if show_std:
+        ax.fill_between(LP, S[:, 0] - S[:, 1], S[:, 0] + S[:, 1], alpha=0.2)
     ax.legend()
     ax.set_xlabel('LP (dBm)')
     ax.set_ylabel('SNR (dB)')

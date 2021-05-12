@@ -56,17 +56,6 @@ def tree_update_ignorenoneleaves(x, y):
     return z_tree
 
 
-def isnamedtupleinstance(x):
-    _type = type(x)
-    bases = _type.__bases__
-    if len(bases) != 1 or bases[0] != tuple:
-        return False
-    fields = getattr(_type, '_fields', None)
-    if not isinstance(fields, tuple):
-        return False
-    return all(type(i)==str for i in fields)
-
-
 def tree_homoreplace(tree, subtree, value):
     subtree_def = tree_flatten(subtree)[1]
     is_subtree = lambda x: tree_flatten(x)[1] == subtree_def
@@ -80,18 +69,14 @@ def namedtuple(name, keys, *args, **kwargs):
     return type(name, (_namedtuple(name, keys, *args, **kwargs),), {'apply': tree_homoreplace})
 
 
-def dict_flatten(d, parent_key='', sep='_'):
-    try:
-        from collections.abc import MutableMapping
-    except ModuleNotFoundError:
-        from collections import MutableMapping
-    items = []
-    for k, v in d.items():
-        new_key = parent_key + sep + k if parent_key else k
-        if isinstance(v, MutableMapping):
-            items.extend(dict_flatten(v, new_key, sep=sep).items())
-        else:
-            items.append((new_key, v))
-    return dict(items)
+def scan(f, init, xs, length=None):
+    if xs is None:
+        xs = [None] * length
+    carry = init
+    ys = []
+    for x in xs:
+        carry, y = f(carry, x)
+        ys.append(y)
+    return carry, ys
 
 
