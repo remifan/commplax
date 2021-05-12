@@ -146,12 +146,9 @@ def _conv1d_fft_oa_full(signal, kernel, fft_size):
     frames = -(-signal_length // frame_length)
 
     signal = jnp.pad(signal, [0, frames * frame_length - signal_length])
-
     signal = jnp.reshape(signal, [-1, frame_length])
-    signal = jnp.pad(signal, [0, fft_size - frame_length])
-    kernel = jnp.pad(kernel, [0, fft_size - kernel_length])
 
-    signal = ifft(fft(signal) * fft(kernel))
+    signal = ifft(fft(signal, fft_size) * fft(kernel, fft_size), fft_size)
     signal = overlap_and_add(signal, frame_length)
 
     signal = signal[:output_length]
@@ -346,21 +343,22 @@ def fftconvolve(x, h, mode='full'):
 
 @jit
 def _fftconvolve(x, h):
-    fft = jnp.fft.fft
-    ifft = jnp.fft.ifft
+    if isfloat(x) and isfloat(h):
+        fft = jnp.fft.rfft
+        ifft = jnp.fft.irfft
+    else:
+        fft = jnp.fft.fft
+        ifft = jnp.fft.ifft
 
-    N = x.shape[0]
-    M = h.shape[0]
-    out_length = N + M -1
-    fft_size = _fft_size_factor(out_length, 5)
-    x = jnp.pad(x, [0, fft_size - N])
-    h = jnp.pad(h, [0, fft_size - M])
-    y = ifft(fft(x) * fft(h))
+    out_length = x.shape[0] + h.shape[0] -1
+    n = _fft_size_factor(out_length, 5)
+    y = ifft(fft(x, n) * fft(h, n), n)
     y = y[:out_length]
-    return y.real if isfloat(x) and isfloat(h) else y
+    return y
 
 
 def fftconvolve2(x, h, mode='full'):
+    #TODO: add float support
     x = jnp.atleast_2d(x)
     h = jnp.atleast_2d(h)
 
