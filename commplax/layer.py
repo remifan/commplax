@@ -110,16 +110,6 @@ def value_and_grad(layer, has_aux=True, **kwargs):
     return jax.value_and_grad(layer.apply, has_aux=has_aux, **kwargs)
 
 
-def apply_trainable_grad(g_tree, b_tree):
-    g_tree_def, b_tree_def = tree_util.tree_structure(g_tree), tree_util.tree_structure(b_tree)
-    assert g_tree_def == b_tree_def, "gradients and trainable have mismatched tree structure"
-    return tree_util.tree_map(lambda g_leaf, b_leaf: g_leaf if b_leaf else g_leaf * 0, g_tree, b_tree)
-
-
-def trainable(weights, invert=False):
-    return tree_util.tree_map(lambda _: not invert, weights)
-
-
 def _assert_tuple_len(t, l):
     assert isinstance(t, tuple) and len(t) == l
 

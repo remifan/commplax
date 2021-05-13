@@ -1,5 +1,5 @@
 import jax
-from jax.tree_util import tree_map, tree_flatten, tree_unflatten
+from jax.tree_util import tree_map, tree_flatten, tree_unflatten, tree_all
 from collections import namedtuple as _namedtuple
 
 
@@ -23,6 +23,17 @@ def gpufirstbackend():
     https://jax.readthedocs.io/en/latest/jax.html#jax.jit
     '''
     return 'gpu' if gpuexists() else 'cpu'
+
+
+def scan(f, init, xs, length=None):
+    if xs is None:
+        xs = [None] * length
+    carry = init
+    ys = []
+    for x in xs:
+        carry, y = f(carry, x)
+        ys.append(y)
+    return carry, ys
 
 
 def tree_shape(x):
@@ -58,25 +69,21 @@ def tree_update_ignorenoneleaves(x, y):
 
 def tree_homoreplace(tree, subtree, value):
     subtree_def = tree_flatten(subtree)[1]
-    is_subtree = lambda x: tree_flatten(x)[1] == subtree_def
-    return tree_map(lambda x: tree_map(lambda _: value, x) if is_subtree(x) else x,
+    is_subtree_def = lambda x: tree_flatten(x)[1] == subtree_def
+    return tree_map(lambda x: tree_map(lambda _: value, x) if is_subtree_def(x) else x,
                     tree,
-                    is_leaf=is_subtree)
+                    is_leaf=is_subtree_def)
+
+
+def tree_homoreplace_multiple(tree, subtrees, value):
+    # subtrees must be list
+    if not isinstance(subtrees, list):
+        subtrees = [subtrees]
+    return scan(lambda t, s: (tree_homoreplace(t, s, value), None), tree, subtrees)[0]
 
 
 def namedtuple(name, keys, *args, **kwargs):
     ''' patch collections.namedtuple with extra pytree utilites '''
-    return type(name, (_namedtuple(name, keys, *args, **kwargs),), {'apply': tree_homoreplace})
-
-
-def scan(f, init, xs, length=None):
-    if xs is None:
-        xs = [None] * length
-    carry = init
-    ys = []
-    for x in xs:
-        carry, y = f(carry, x)
-        ys.append(y)
-    return carry, ys
+    return type(name, (_namedtuple(name, keys, *args, **kwargs),), {'apply': tree_homoreplace_multiple})
 
 
