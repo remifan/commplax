@@ -96,7 +96,7 @@ def mimoconv(y, h, mode='same', conv=xop.fftconvolve):
     return z
 
 
-def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xop.fftconvolve, mimolpf=False):
+def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xop.fftconvolve):
 
     y = device_put(y)
     h = device_put(h)
@@ -110,23 +110,7 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xo
     md = 'SAME' if homosteps else mode
 
     D = jit(vmap(lambda y, h: conv(y, h, mode=md), in_axes=1, out_axes=1))
-    # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # often too slow for long h
-
-    if c.ndim == 3:
-        N = jit(lambda y, c: y * jnp.exp(1j * (abs(y)**2 @ c)))
-        C = 0
-    elif c.ndim == 4:
-        # MIMO convolution
-        ctaps = c.shape[1]
-        if not mimolpf:
-            mask = comm.delta(ctaps, dims=dims * dims, dtype=c.dtype).reshape((ctaps, dims, dims))
-            mask[:, np.arange(dims), np.arange(dims)] = (np.ones(ctaps))[:, None]
-            c *= jnp.array(mask)[None, ...]
-        F = jit(lambda p, c: mimoconv(p, c, mode='same', conv=conv))
-        N = lambda y, c: y * jnp.exp(1j * F(abs(y)**2, c))
-        C = ctaps - 1
-    else:
-        raise ValueError('wrong c shape')
+    N = jit(lambda y, c: y * jnp.exp(1j * (abs(y)**2 @ c)))
 
     T = h.shape[1] - 1
     K = h.shape[0]
@@ -141,7 +125,7 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xo
             y = N(y, c[i])
 
     if homosteps and mode.lower() == 'valid':
-       y = y[K * (T + C) // 2: -K * (T + C) // 2]
+       y = y[K * T // 2: -K * T // 2]
 
     return y * optpowscale
 
@@ -181,57 +165,6 @@ def _nltriplets(y, n, m):
     nlh = hm[:, :, None] * hn[:, None, :] * hk.conj() + vm[:, :, None] * hn[:, None, :] * vk.conj()
     nlv = vm[:, :, None] * vn[:, None, :] * vk.conj() + hm[:, :, None] * vn[:, None, :] * hk.conj()
     return jnp.stack([nlh, nlv], axis=-1)
-
-
-def dbp_timedomain2(y, h, c, n, mode='SAME', homosteps=True, scansteps=True, conv=xop.fftconvolve):
-
-    y = device_put(y)
-    h = device_put(h)
-    c = device_put(c)
-
-    dims = y.shape[-1]
-
-    optpowscale = jnp.sqrt(dims)
-    y /= optpowscale
-
-    md = 'SAME' if homosteps else mode
-
-    ntaps = n.shape[1]
-
-    D = jit(vmap(lambda y, h: conv(y, h, mode=md), in_axes=1, out_axes=1))
-    # D = jit(vmap(lambda y,h: xop.conv1d_lax(y, h), in_axes=1, out_axes=1)) # often too slow for long h
-
-    if c.ndim == 3:
-        N = jit(lambda y, c: y * jnp.exp(1j * (abs(y)**2 @ c)))
-        C = 0
-    elif c.ndim == 4:
-        # MIMO convolution
-        ctaps = c.shape[1]
-        F = jit(lambda p, c: mimoconv(p, c, mode='same', conv=conv))
-        N = lambda y, c: y * jnp.exp(1j * F(abs(y)**2, c))
-        C = ctaps - 1
-    else:
-        raise ValueError('wrong c shape')
-
-    T = h.shape[1] - 1
-    K = h.shape[0]
-    L = n.shape[1] - 1
-
-    if homosteps and scansteps: # homogeneous steps is faster on first jitted run
-    # scan not working on 'SAME' mode due to carry shape change
-        y = xop.scan(lambda x, p: (N(D(x, p[0]), p[1]), 0.), y, (h, c))[0]
-    else:
-        steps = c.shape[0]
-        for i in range(steps):
-            y = D(y, h[i])
-            y = N(y, c[i])
-
-    y = y + (nltriplets(y, n=ntaps//2, m=ntaps//2) * n[None, ...]).sum(axis=(1, 2))
-
-    if homosteps and mode.lower() == 'valid':
-       y = y[K * (T + C + L) // 2: -K * (T + C + L) // 2]
-
-    return y * optpowscale
 
 
 def dbp_direct(y, H, c):

@@ -3,16 +3,16 @@ import numpy as np
 import jax
 from functools import partial, wraps, reduce
 from jax import numpy as jnp, jit, random, device_put, tree_util
-from typing import NamedTuple, Callable, Tuple, Any
+from typing import NamedTuple, Callable, Optional, Tuple, Any
 from commplax.util import namedtuple
 from commplax import util, comm, xcomm, xop, adaptive_filter as af
-from jax.nn.initializers import ones, zeros
+from jax.nn.initializers import ones, zeros, glorot_normal, normal
 
 
 class Layer(NamedTuple):
-    name: str
-    init: Callable
-    apply: Callable
+    name: Any
+    init: Any
+    apply: Any
     truth_range: Any
 
 
@@ -162,6 +162,20 @@ def _chained_call(fs, init, length=None):
 
 
 @layer
+def Dense(out_dim, W_init=glorot_normal(), b_init=normal()):
+  """Layer constructor function for a dense (fully-connected) layer."""
+  def init_fun(rng, input_shape):
+    output_shape = input_shape[:-1] + (out_dim,)
+    k1, k2 = random.split(rng)
+    W, b = W_init(k1, (input_shape[-1], out_dim)), b_init(k2, (out_dim,))
+    return output_shape, (W, b)
+  def apply_fun(weights, inputs, *args, **kwargs):
+    W, b = weights
+    return jnp.dot(inputs, W) + b
+  return init_fun, apply_fun
+
+
+@layer
 def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda k, s: np.zeros(s), dtype=jnp.complex64, conv=xop.fftconvolve):
     if not callable(winit):
         winit0 = winit
@@ -239,6 +253,7 @@ def FOE(sps=2):
         return input_shape
 
     def apply(inputs, trangein, *args, fo=None, **kwargs):
+        assert fo is not None
         trangein = (trangein[0] * sps, trangein[1] * sps)
         fo = _slice_valid(fo, trangein)
         return inputs * fo
@@ -246,24 +261,24 @@ def FOE(sps=2):
     return init, apply
 
 
-# @layer
-# def DBP(sr, lspan, nspan, dtaps, lp, sps=2, vspan=None):
-#     steps = nspan if vspan is None else vspan
-#     n_invalid = (dtaps - 1) * steps
-#     trange = TruthRange(n_invalid // 2 // sps, -n_invalid // 2 // sps)
+@layer
+def DBP(sr, lspan, nspan, dtaps, lp, sps=2, vspan=None):
+    steps = nspan if vspan is None else vspan
+    n_invalid = (dtaps - 1) * steps
+    trange = TruthRange(n_invalid // 2 // sps, -n_invalid // 2 // sps)
 
-#     def init(input_shape):
-#         _, wD, wN = comm.dbp_params(sr, lspan, nspan, dtaps, launch_power=lp, virtual_spans=vspan)
-#         output_shape = (input_shape[0] - n_invalid,) + input_shape[1:]
-#         weights = (wD, wN * 0.2)
-#         return output_shape, weights
+    def init(input_shape):
+        wD, wN = comm.dbp_params(sr, lspan, nspan, dtaps, launch_power=lp, virtual_spans=vspan)
+        output_shape = (input_shape[0] - n_invalid,) + input_shape[1:]
+        weights = (wD, wN * 0.2)
+        return output_shape, weights
 
-#     def apply(weights, inputs, *args, **kwargs):
-#         wD, wN = weights
-#         outputs = xcomm.dbp_timedomain(inputs, wD, wN, mode='valid')
-#         return outputs
+    def apply(weights, inputs, *args, **kwargs):
+        wD, wN = weights
+        outputs = xcomm.dbp_timedomain(inputs, wD, wN, mode='valid')
+        return outputs
 
-#     return init, apply, trange
+    return init, apply, trange
 
 
 @statlayer
@@ -278,7 +293,7 @@ def MIMOAEq(taps=32, sps=2, train=False, mimo=af.ddlms, mimokwargs={}, mimoinita
         states = (0, stats)
         return output_shape, (), states
 
-    def apply(weights, inputs, states, trangein, *args, **kwargs):
+    def apply(_, inputs, states, trangein, *args, **kwargs):
         truth = _slice_valid(kwargs.get('truth'), trange @ trangein)
         inputs = xop.frame(inputs, taps, sps)
         i, stats = states
@@ -404,14 +419,14 @@ def FanOutAxis(axis=-1):
         outputs = []
         for inp in np.moveaxis(inputs, axis, 0):
             outputs.append(inp)
-        return outputs
+        return tuple(outputs)
 
     trange = lambda trangein=TRANGE0: (trangein,)
     return init, apply, trange
 
 
 # Composing layers via combinators
-def serial(*layers):
+def _serial(*layers):
     """Combinator for composing layers in serial."""
     names, inits, applys, tranges = zip(*layers)
     nlayers = len(layers)
@@ -445,11 +460,11 @@ def serial(*layers):
         return inputs, StateTuple(*new_states)
 
     return init, apply, trange
-s = statlayer(serial, name='s') # short alias
-serial = statlayer(serial, name='serial')
+s = statlayer(_serial, name='s') # short alias
+serial = statlayer(_serial, name='serial')
 
 
-def parallel(*layers):
+def _parallel(*layers):
     """Combinator for composing layers in parallel."""
     nlayers = len(layers)
     names, inits, applys, tranges = zip(*layers)
@@ -483,8 +498,8 @@ def parallel(*layers):
         return tuple(trangeout)
 
     return init, apply, trange
-p = statlayer(parallel, name='p') # short alias
-parallel = statlayer(parallel, name='parallel')
+p = statlayer(_parallel, name='p') # short alias
+parallel = statlayer(_parallel, name='parallel')
 
 
 def shape_dependent(make_layer):

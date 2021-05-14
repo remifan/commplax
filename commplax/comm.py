@@ -310,7 +310,11 @@ def dbp_params(
     fiber_reference_frequency=299792458/1550E-9,      # fiber reference frequency [Hz]
     ignore_beta3=False,
     polmux=True,
+    domain='time',
     step_method="uniform"):
+
+    domain = domain.lower()
+    assert domain == 'time' or domain == 'frequency'
 
     # short names
     pi  = np.pi
@@ -358,7 +362,7 @@ def dbp_params(
     h_casual = np.tile(h_casual[None, :, None], (NIter, 1, dims))
     phi = np.tile(phi[:, None, None], (1, dims, dims))
 
-    return H, h_casual, phi
+    return (h_casual, phi) if domain == 'time' else (H, phi)
 
 
 def finddelay(x, y):

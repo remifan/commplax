@@ -82,6 +82,7 @@ def desc_filter(w, H, ax=None, colors=None, legend=None, phase=True):
     for H_,i in zip(H, range(len(H))):
         ax1.plot(w, abs(H_), color=colors[i])
         ax1.set_ylabel('amp.')
+        ax1.set_xlabel('norm. freq.')
 
         if phase:
             if ax2 is None:

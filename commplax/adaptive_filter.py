@@ -43,6 +43,8 @@ def adaptive_filter(af_maker, trainable=False):
             if trainable:
                 af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
                 af_inp = (af_inp + (0.,))[:2]
+            else:
+                af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
             af_inp = jax.device_put(af_inp)
             af_state, af_out = jax.lax.stop_gradient(update(i, af_state, af_inp))
             return af_state, af_out
@@ -94,7 +96,12 @@ def frame(y, taps, sps, rtap=None):
     return yf
 
 
-def iterate(update: UpdateFn, step0: Step, state: AFState, signal: Signal, truth=None, device=None):
+def iterate(update: UpdateFn,
+            step0: Step,
+            state: AFState,
+            signal: Signal,
+            truth=None,
+            device=None):
     steps = step0 + jnp.arange(signal.shape[0])
     truth = jnp.zeros((0, signal.shape[-1]), dtype=signal.dtype) if truth is None else truth[:signal.shape[0]]
     truth = jnp.pad(truth, [[0, signal.shape[0] - truth.shape[0]], [0, 0]])
@@ -236,7 +243,6 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
 
     def update(i, state, u):
         w, z, r, betapow = state
-
         z = jnp.concatenate((r2c(mimo(w, u)[None, :]), z[:-1,:]))
         z0 = jnp.repeat(z, dims, axis=-1)
         z1 = jnp.tile(z, (1, dims))
