@@ -69,9 +69,9 @@ def _modulusmimo(y, R2, Rs, sps, taps, cma_samples):
     # get initial weights
     s0 = cma_init(taps=taps, dtype=y.dtype)
     # initialize MIMO via MU-CMA to avoid singularity
-    (w0, *_,), (ws1, loss1) = af.iterate(cma_update, s0, yf[:cma_samples])
+    (w0, *_,), (ws1, loss1) = af.iterate(cma_update, 0, s0, yf[:cma_samples])[1]
     # switch to RDE
-    _, (ws2, loss2) = af.iterate(rde_update, w0, yf[cma_samples:])
+    _, (ws2, loss2) = af.iterate(rde_update, 0, w0, yf[cma_samples:])[1]
     loss = jnp.concatenate([loss1, loss2], axis=0)
     ws = jnp.concatenate([ws1, ws2], axis=0)
     x_hat = rde_map(ws, yf)
@@ -98,7 +98,7 @@ def _lmsmimo(signal, truth, sps, taps, mu_w, mu_f, mu_s, mu_b, beta):
                                              lockgain=False)
     yf = af.frame(y, taps, sps)
     s0 = lms_init(taps, mimoinit='centralspike')
-    _, (ss, (loss, *_)) = af.iterate(lms_update, s0, yf, x)
+    _, (ss, (loss, *_)) = af.iterate(lms_update, 0, s0, yf, x)[1]
     xhat = lms_map(ss, yf)
     return xhat, ss[-1], loss
 
@@ -118,7 +118,7 @@ def _rdemimo(signal, truth, lr, Rs, sps, taps):
     rde_init, rde_update, rde_map = af.rde(lr=lr, Rs=Rs, dims=dims)
     yf = af.frame(y, taps, sps)
     s0 = rde_init(taps=taps, dtype=y.dtype)
-    _, (ss, loss) = af.iterate(rde_update, s0, yf, x)
+    _, (ss, loss) = af.iterate(rde_update, 0, s0, yf, x)[1]
     xhat = rde_map(ss, yf)
     return xhat, loss
 
@@ -157,7 +157,7 @@ def _ekfcpr(y, x, const):
     dims = y.shape[-1]
     cpr_init, cpr_update, cpr_map = af.array(af.cpane_ekf, dims)(beta=0.6, const=const)
     cpr_state = cpr_init()
-    _, (phi, _) = af.iterate(cpr_update, cpr_state, y, x)
+    _, (phi, _) = af.iterate(cpr_update, 0, cpr_state, y, x)[1]
     xhat = cpr_map(phi, y)
     return xhat, phi
 
