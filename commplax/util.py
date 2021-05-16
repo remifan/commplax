@@ -1,6 +1,7 @@
 import jax
-from jax.tree_util import tree_map, tree_flatten, tree_unflatten, tree_all
+from jax.tree_util import tree_map, tree_flatten, tree_unflatten, tree_structure
 from collections import namedtuple as _namedtuple
+from commplax.third_party import namedtuple_pprint
 
 
 def getdev(x):
@@ -40,10 +41,14 @@ def tree_shape(x):
     return tree_map(lambda x: x.shape, x)
 
 
-def tree_like(x, value=None):
-    x_flat, x_tree = tree_flatten(x)
-    v_flat = (value,) * len(x_flat)
-    return tree_unflatten(x_tree, v_flat)
+# def tree_like(x, value=None):
+#     x_flat, x_tree = tree_flatten(x)
+#     v_flat = (value,) * len(x_flat)
+#     return tree_unflatten(x_tree, v_flat)
+
+
+def tree_full(weights, value=True):
+    return tree_map(lambda _: value, weights)
 
 
 def tree_update_ignorenoneleaves(x, y):
@@ -68,8 +73,8 @@ def tree_update_ignorenoneleaves(x, y):
 
 
 def tree_homoreplace(tree, subtree, value):
-    subtree_def = tree_flatten(subtree)[1]
-    is_subtree_def = lambda x: tree_flatten(x)[1] == subtree_def
+    subtree_def = tree_structure(subtree)
+    is_subtree_def = lambda x: tree_structure(x) == subtree_def
     return tree_map(lambda x: tree_map(lambda _: value, x) if is_subtree_def(x) else x,
                     tree,
                     is_leaf=is_subtree_def)
@@ -86,4 +91,15 @@ def namedtuple(name, keys, *args, **kwargs):
     ''' patch collections.namedtuple with extra pytree utilites '''
     return type(name, (_namedtuple(name, keys, *args, **kwargs),), {'apply': tree_homoreplace_multiple})
 
+
+def isnamedtupleinstance(x):
+    t = type(x)
+    # b = t.__bases__
+    # if len(b) != 1 or b[0] != tuple: return False
+    f = getattr(t, '_fields', None)
+    if not isinstance(f, tuple): return False
+    return all(type(n)==str for n in f)
+
+
+pprint = namedtuple_pprint.PrettyPrinter(indent=2).pprint
 

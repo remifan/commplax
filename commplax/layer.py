@@ -56,9 +56,10 @@ def make_trangefn(trange):
     return _propogate
 
 
-def layer(layer_maker, pure_fn=False, has_state=False, name=None):
+def layer(layer_maker, pure_fn=False, has_state=False, name=None, require_name=False):
     @wraps(layer_maker)
     def _layer_maker(*args, name=layer_maker.__name__ if name is None else name, **kwargs):
+        args = (name,) + args if require_name else args
         init, apply, trange = (layer_maker(*args, **kwargs) + (TRANGE0,))[:3]
 
         if not callable(trange):
@@ -137,19 +138,24 @@ def _rename_dupnames(names):
     return renames
 
 
-def _itp(names):
+def _itp(name, names):
     ''' input_shapes namedtuple '''
-    return namedtuple('InputShape', names, defaults=(None,) * len(names))
+    return namedtuple('InputShape_' + name, names, defaults=(None,) * len(names))
 
 
-def _stp(names):
+def _stp(name, names):
     ''' state namedtuple '''
-    return namedtuple('State', names, defaults=(None,) * len(names))
+    return namedtuple('State_' + name, names, defaults=(None,) * len(names))
 
 
-def _wtp(names):
+def _wtp(name, names):
     ''' weights namedtuple '''
-    return namedtuple('Weights', names, defaults=(None,) * len(names))
+    return namedtuple('Weights_' + name, names, defaults=(None,) * len(names))
+
+
+def new_node(name, t):
+    ''' TODO: recursively new '''
+    return t if util.isnamedtupleinstance(t) else namedtuple(name, ['n' + str(i) for i in range(len(t))])(*t)
 
 
 def _chained_call(fs, init, length=None):
@@ -176,7 +182,7 @@ def Dense(out_dim, W_init=glorot_normal(), b_init=normal()):
 
 
 @layer
-def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda k, s: np.zeros(s), dtype=jnp.complex64, conv=xop.fftconvolve):
+def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda k, s: np.zeros(s), dtype=jnp.complex64, conv=xop.convolve):
     if not callable(winit):
         winit0 = winit
         taps = winit0.shape[0]
@@ -210,7 +216,7 @@ def Conv1d(taps=31, rtap=None, sps=1, mode='valid', winit=lambda k, s: np.zeros(
 
 
 @layer
-def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda k, s, d: np.zeros((s, d, d)), dtype=None, conv=xop.fftconvolve):
+def MIMOConv(taps=31, rtap=None, sps=1, mode='valid', winit=lambda k, s, d: np.zeros((s, d, d)), dtype=None, conv=xop.convolve):
     if not callable(winit):
         winit0 = winit
         taps = winit0.shape[0]
@@ -426,7 +432,7 @@ def FanOutAxis(axis=-1):
 
 
 # Composing layers via combinators
-def _serial(*layers):
+def _serial(name, *layers):
     """Combinator for composing layers in serial."""
     names, inits, applys, tranges = zip(*layers)
     nlayers = len(layers)
@@ -434,8 +440,8 @@ def _serial(*layers):
     trange = _chained_call(tranges, TRANGE0)
 
     # group sublayers into namedtuple
-    WeightsTuple = _wtp(names)
-    StateTuple = _stp(names)
+    WeightsTuple = _wtp(name, names)
+    StateTuple = _stp(name, names)
 
     def init(rng, input_shape):
         weights = []
@@ -460,20 +466,20 @@ def _serial(*layers):
         return inputs, StateTuple(*new_states)
 
     return init, apply, trange
-s = statlayer(_serial, name='s') # short alias
-serial = statlayer(_serial, name='serial')
+s = statlayer(_serial, name='s', require_name=True) # short alias
+serial = statlayer(_serial, name='serial', require_name=True)
 
 
-def _parallel(*layers):
+def _parallel(name, *layers):
     """Combinator for composing layers in parallel."""
     nlayers = len(layers)
     names, inits, applys, tranges = zip(*layers)
     names = _rename_dupnames(names)
 
     # group sublayers into namedtuple
-    InputsTuple = _itp(names)
-    WeightsTuple = _wtp(names)
-    StateTuple = _stp(names)
+    InputsTuple = _itp(name, names)
+    WeightsTuple = _wtp(name, names)
+    StateTuple = _stp(name, names)
 
     def init(rng, input_shape):
         rngs = random.split(rng, nlayers)
@@ -498,8 +504,8 @@ def _parallel(*layers):
         return tuple(trangeout)
 
     return init, apply, trange
-p = statlayer(_parallel, name='p') # short alias
-parallel = statlayer(_parallel, name='parallel')
+p = statlayer(_parallel, name='p', require_name=True) # short alias
+parallel = statlayer(_parallel, name='parallel', require_name=True)
 
 
 def shape_dependent(make_layer):
