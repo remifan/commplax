@@ -1,4 +1,3 @@
-from jax.core import Value
 import numpy as np
 from jax import lax, jit, vmap, numpy as jnp, device_put
 from jax.ops import index, index_add, index_update
@@ -45,6 +44,21 @@ def _conv1d_lax(signal, kernel, mode):
     x = device_put(signal)
     h = device_put(kernel)
 
+    if x.shape[0] < h.shape[0]:
+        x, h = h, x
+
+    mode = mode.upper()
+
+    if mode == 'FULL': # lax.conv_general_dilated has no such mode by default
+        pads = h.shape[0] - 1
+        mode = [(pads, pads)]
+    elif mode == 'SAME':  # lax.conv_general_dilated use Matlab convention on even-tap kernel in its own SAME mode
+        lpads = h.shape[0] - 1 - (h.shape[0] - 1) // 2
+        hpads = h.shape[0] - 1 - h.shape[0] // 2
+        mode = [(lpads, hpads)]
+    else:  # VALID mode is fine
+        pass
+
     x = x[jnp.newaxis,:,jnp.newaxis]
     h = h[::-1,jnp.newaxis,jnp.newaxis]
     dn = lax.conv_dimension_numbers(x.shape, h.shape, ('NWC', 'WIO', 'NWC'))
@@ -53,7 +67,7 @@ def _conv1d_lax(signal, kernel, mode):
     x = lax.conv_general_dilated(x,      # lhs = image tensor
                                  h,      # rhs = conv kernel tensor
                                  (1,),   # window strides
-                                 mode.upper(), # padding mode
+                                 mode,   # padding mode
                                  (1,),   # lhs/image dilation
                                  (1,),   # rhs/kernel dilation
                                  dn)     # dimension_numbers = lhs, rhs, out dimension permu
@@ -88,7 +102,7 @@ def _fft_size_factor(x, gpf, cond=lambda _: True):
     return x
 
 
-def conv1d_oa_fftsize(signal_length, kernel_length, oa_factor=10, max_fft_prime_factor=5):
+def conv1d_oa_fftsize(signal_length, kernel_length, oa_factor=8, max_fft_prime_factor=5):
     target_fft_size = kernel_length * oa_factor
     if target_fft_size < signal_length:
         fft_size = _fft_size_factor(target_fft_size, max_fft_prime_factor)
@@ -395,29 +409,32 @@ def _fftconvolve2(x, h):
 
 
 def convolve(a, v, mode='full', method='auto'):
-    a = jnp.atleast_1d(a)
-    v = jnp.atleast_1d(v)
+    return _convolve(a, v, mode, method)
+
+
+def _convolve(a, v, mode, method):
+    a = jnp.atleast_1d(a) + .0
+    v = jnp.atleast_1d(v) + .0
     method = method.lower()
 
+    if a.shape[0] < v.shape[0]:
+        a, v = v, a
+
     if method == 'auto':
+        method = 0 if v.shape[0] < 3 else 1
+    elif method == 'direct':
         method = 0
     elif method == 'fft':
-        method = 0
-    elif method == 'direct':
         method = 1
     else:
         raise ValueError('invalid method')
 
     if method == 0:
-        z = fftconvolve(a, v, mode=mode)
+        conv = jnp.convolve if isfloat(a) and isfloat(v) else conv1d_lax
     else:
-        # jnp.convolve() does not support complex number yet
-        # jnp.convolve seems faster in 1d case, need to measure for precision
-        if jnp.iscomplexobj(a) or jnp.iscomplexobj(v):
-            z = conv1d_lax(a, v, mode)
-        else:
-            z = jnp.convolve(a, v, mode)
-    return z
+        conv = conv1d_fft_oa if a.shape[0] >= 500 and a.shape[0] / v.shape[0] >= 50 else fftconvolve
+
+    return conv(a, v, mode=mode)
 
 
 def correlate(a, v, mode='same', method='auto'):
@@ -425,7 +442,6 @@ def correlate(a, v, mode='same', method='auto'):
     mode = 'same'
     c_{av}[k] = sum_n a[n+k] * conj(v[n])
     '''
-    # NOTE: jnp.correlate() does not support complex inputs
     a = jnp.atleast_1d(a)
     v = jnp.atleast_1d(v)
     z = convolve(a, v[::-1].conj(), mode=mode, method=method)
@@ -494,7 +510,7 @@ def frft(f, a):
         N = x.shape[0]
         y = jnp.zeros(2 * N -1, dtype=x.dtype)
         y = index_update(y, index[:2 * N:2], x)
-        xint = fftconvolve(
+        xint = convolve(
            y[:2 * N],
            jnp.sinc(jnp.arange(-(2 * N - 3), (2 * N - 2)).T / 2),
         )
@@ -515,7 +531,7 @@ def frft(f, a):
 
         # chirp convolution
         c = jnp.pi / N / sina / 4
-        ret = fftconvolve(
+        ret = convolve(
             jnp.exp(1j * c * jnp.arange(-(4 * N - 4), 4 * N - 3).T ** 2),
             f,
         )
@@ -530,7 +546,6 @@ def frft(f, a):
         return ret
 
     def other_cases(a, f):
-
         a, f = lax.cond(
             a > 2.0,
             None,
