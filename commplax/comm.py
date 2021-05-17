@@ -1,4 +1,5 @@
 import re
+from jax.core import Value
 import numpy as np
 import pandas as pd
 from scipy import signal, special
@@ -9,33 +10,27 @@ import quantumrandom
 
 def randpam(s, n, p=None):
     a = np.linspace(-s+1, s-1, s)
-
     return np.random.choice(a, n, p=p) + 1j * np.random.choice(a, n, p=p)
 
 
 def randqam(s, n, p=None):
     m = np.int(np.sqrt(s))
     a = np.linspace(-m+1, m-1, m, dtype=np.float64)
-
     return np.random.choice(a, n, p=p) + 1j * np.random.choice(a, n, p=p)
 
 
 def grayenc_int(x):
     x = np.asarray(x, dtype=int)
-
     return x ^ (x >> 1)
 
 
 def graydec_int(x):
     x = np.atleast_1d(np.asarray(x, dtype=int))
-
     mask = np.array(x)
-
     while mask.any():
         I       = mask > 0
         mask[I] >>= 1
         x[I]    ^= mask[I]
-
     return x
 
 
@@ -48,10 +43,8 @@ def qamgrayenc_int(x, L):
     x = np.asarray(x, dtype=int)
     M = int(np.sqrt(L))
     B = int(np.log2(M))
-
     x1 = x // M
     x2 = x %  M
-
     return (grayenc_int(x1) << B) + grayenc_int(x2)
 
 
@@ -59,65 +52,51 @@ def qamgraydec_int(x, L):
     x = np.asarray(x, dtype=int)
     M = int(np.sqrt(L))
     B = int(np.log2(M))
-
     x1 = graydec_int(x >> B)
     x2 = graydec_int(x % (1 << B))
-
     return x1 * M + x2
 
 
 def pamdecision(x, L):
     x = np.asarray(x)
     y = np.atleast_1d((np.round(x / 2 + 0.5) - 0.5) * 2).astype(int)
-
     # apply bounds
     bd = L - 1
     y[y >  bd] =  bd
     y[y < -bd] = -bd
-
     return y
 
 
 def qamdecision(x, L):
     x = np.atleast_1d(x)
     M = int(np.sqrt(L))
-
     if any(np.iscomplex(x)):
         I = pamdecision(np.real(x), M)
         Q = pamdecision(np.imag(x), M)
-
         y = I + 1j*Q
     else: # is tuple
         I = pamdecision(x[0], M)
         Q = pamdecision(x[1], M)
         y = (I, Q)
-
     return y
 
 
 def qammod(x, L):
     x = np.asarray(x, dtype=int)
     M = int(np.sqrt(L))
-
     A = np.linspace(-M+1, M-1, M, dtype=np.float64)
     C = A[None,:] + 1j*A[::-1, None]
-
     d = qamgraydec_int(x, L)
-
     return C[d // M, d % M]
 
 
 def qamdemod(x, L):
     x = np.asarray(x)
     M = int(np.sqrt(L))
-
     x = qamdecision(x, L)
-
     c = ((np.real(x) + M - 1) // 2).astype(int)
     r = ((M - 1 - np.imag(x)) // 2).astype(int)
-
     d = qamgrayenc_int(r * M + c, L)
-
     return d
 
 
@@ -125,14 +104,12 @@ def int2bit(d, M):
     M = np.asarray(M, dtype=np.int)
     d = np.atleast_1d(d).astype(np.uint8)
     b = np.unpackbits(d[:,None], axis=1)[:,-M:]
-
     return b
 
 
 def bit2int(b, M):
     b = np.asarray(b, dtype=np.uint8)
     d = np.packbits(np.pad(b.reshape((-1,M)), ((0,0),(8-M,0))))
-
     return d
 
 
@@ -282,9 +259,31 @@ def delta(taps, dims=None, dtype=np.complex64):
     return mf if dims is None else np.tile(mf[:, None], dims)
 
 
-def gaussian(n=11, sigma=1, dims=None, dtype=np.complex64):
+def gauss(bw, taps=None, oddtaps=True, dtype=np.float64):
+    """ https://en.wikipedia.org/wiki/Gaussian_filter """
+    eps = 1e-8 # stablize to work with gauss_minbw
+    gamma = 1 / (2 * np.pi * bw * 1.17741)
+    mintaps = int(np.ceil(6 * gamma - 1 - eps))
+    if taps is None:
+        taps = mintaps
+    elif taps < mintaps:
+        raise ValueError('required {} taps which is less than minimal default {}'.format(taps, mintaps))
+
+    if oddtaps is not None:
+        if oddtaps:
+            taps = mintaps if mintaps % 2 == 1 else mintaps + 1
+        else:
+            taps = mintaps if mintaps % 2 == 0 else mintaps + 1
+    return gauss_kernel(taps, gamma, dtype=dtype)
+
+
+def gauss_minbw(taps):
+    return 1 / (2 * np.pi * ((taps + 1) / 6) * 1.17741)
+
+
+def gauss_kernel(n=11, sigma=1, dims=None, dtype=np.complex64):
     r = np.arange(-int(n / 2), int(n / 2) + 1) if n % 2 else np.linspace(-int(n / 2) + 0.5, int(n / 2) - 0.5, n)
-    w = np.array([1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-float(x)**2/(2 * sigma**2)) for x in r]).astype(dtype)
+    w = np.array([1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(-float(x)**2 / (2 * sigma**2)) for x in r]).astype(dtype)
     return w if dims is None else np.tile(w[:, None], dims)
 
 
