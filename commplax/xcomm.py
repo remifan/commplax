@@ -130,43 +130,6 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xo
     return y * optpowscale
 
 
-def nltriplets(y, n=1, m=1):
-    return _nltriplets(y, n, m)
-
-
-partial(jit, static_argnums=(1, 2))
-def _nltriplets(y, n, m):
-    N = y.shape[0]
-    if y.shape[-1] != 2:
-        raise ValueError('only polmux signal is allowed')
-    h = y[:, 0]
-    v = y[:, 1]
-
-    boundi = lambda i: jnp.where((0 <= i) & (i < N), i, 0)
-    boundv = lambda i, a: jnp.where((0 <= i) & (i < N), a[i], 0)
-
-    t = jnp.arange(N)
-    m = jnp.arange(-m, m + 1)
-    n = jnp.arange(-n, n + 1)
-    k = m[:, None] + n[None, :]
-    tm = m[None, :] + t[:, None]
-    tn = n[None, :] + t[:, None]
-    tk = k[None, :] + t[:, None, None]
-    tm = boundi(tm)
-    tn = boundi(tn)
-    tk = boundi(tk)
-    hm = boundv(tm, h)
-    hn = boundv(tn, h)
-    hk = boundv(tk, h)
-    vm = boundv(tm, v)
-    vn = boundv(tn, v)
-    vk = boundv(tk, v)
-
-    nlh = hm[:, :, None] * hn[:, None, :] * hk.conj() + vm[:, :, None] * hn[:, None, :] * vk.conj()
-    nlv = vm[:, :, None] * vn[:, None, :] * vk.conj() + hm[:, :, None] * vn[:, None, :] * hk.conj()
-    return jnp.stack([nlh, nlv], axis=-1)
-
-
 def dbp_direct(y, H, c):
     y = device_put(y)
     H = device_put(H)

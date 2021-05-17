@@ -432,6 +432,7 @@ def _convolve(a, v, mode, method):
     if method == 0:
         conv = jnp.convolve if isfloat(a) and isfloat(v) else conv1d_lax
     else:
+        # tested not bad on my cpu/gpu. TODO fine tune by interacting with overlap-add factor
         conv = conv1d_fft_oa if a.shape[0] >= 500 and a.shape[0] / v.shape[0] >= 50 else fftconvolve
 
     return conv(a, v, mode=mode)
