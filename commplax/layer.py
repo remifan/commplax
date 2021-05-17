@@ -4,7 +4,7 @@ import jax
 from functools import partial, wraps, reduce
 from jax import numpy as jnp, jit, random, device_put, tree_util
 from typing import NamedTuple, Callable, Optional, Tuple, Any
-from commplax.util import namedtuple
+from collections import namedtuple
 from commplax import util, comm, xcomm, xop, adaptive_filter as af
 from jax.nn.initializers import ones, zeros, glorot_normal, normal
 
@@ -111,6 +111,11 @@ def value_and_grad(layer, has_aux=True, **kwargs):
     return jax.value_and_grad(layer.apply, has_aux=has_aux, **kwargs)
 
 
+def nodetuple(name, keys, *args, **kwargs):
+    ''' patch collections.namedtuple with extra pytree utilites '''
+    return type(name, (namedtuple(name, keys, *args, **kwargs),), {'apply': util.tree_homoreplace})
+
+
 def _assert_tuple_len(t, l):
     assert isinstance(t, tuple) and len(t) == l
 
@@ -139,32 +144,27 @@ def _rename_dupnames(names):
 
 
 def _itp(name, names):
-    ''' input_shapes namedtuple '''
-    return namedtuple('InputShape_' + name, names, defaults=(None,) * len(names))
+    ''' input_shapes nodetuple '''
+    return nodetuple('InputShape_' + name, names, defaults=(None,) * len(names))
 
 
 def _stp(name, names):
-    ''' state namedtuple '''
-    return namedtuple('State_' + name, names, defaults=(None,) * len(names))
+    ''' state nodetuple '''
+    return nodetuple('State_' + name, names, defaults=(None,) * len(names))
 
 
 def _wtp(name, names):
-    ''' weights namedtuple '''
-    return namedtuple('Weights_' + name, names, defaults=(None,) * len(names))
+    ''' weights nodetuple '''
+    return nodetuple('Weights_' + name, names, defaults=(None,) * len(names))
 
 
-def new_node(name, t):
-    ''' TODO: recursively new '''
-    return t if util.isnamedtupleinstance(t) else namedtuple(name, ['n' + str(i) for i in range(len(t))])(*t)
-
-
-def _chained_call(fs, init, length=None):
-    if callable(fs):
-        fs = [fs] * length
-    ret = init
-    for f in fs:
-        ret = f(ret)
-    return ret
+# def isnodetupleinstance(x):
+#     t = type(x)
+#     # b = t.__bases__
+#     # if len(b) != 1 or b[0] != tuple: return False
+#     f = getattr(t, '_fields', None)
+#     if not isinstance(f, tuple): return False
+#     return all(type(n)==str for n in f)
 
 
 @layer
@@ -437,7 +437,7 @@ def _serial(name, *layers):
     names, inits, applys, tranges = zip(*layers)
     nlayers = len(layers)
     names = _rename_dupnames(names)
-    trange = _chained_call(tranges, TRANGE0)
+    trange = util.chain(tranges, TRANGE0)
 
     # group sublayers into namedtuple
     WeightsTuple = _wtp(name, names)

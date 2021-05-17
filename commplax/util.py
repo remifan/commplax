@@ -37,18 +37,29 @@ def scan(f, init, xs, length=None):
     return carry, ys
 
 
+def chain(fs, init, length=None):
+    if callable(fs):
+        fs = [fs] * length
+    ret = init
+    for f in fs:
+        ret = f(ret)
+    return ret
+
+
 def tree_shape(x):
     return tree_map(lambda x: x.shape, x)
 
 
-# def tree_like(x, value=None):
-#     x_flat, x_tree = tree_flatten(x)
-#     v_flat = (value,) * len(x_flat)
-#     return tree_unflatten(x_tree, v_flat)
-
-
 def tree_full(weights, value=True):
     return tree_map(lambda _: value, weights)
+
+
+def tree_all(x):
+    return all(jax.tree_flatten(x)[0])
+
+
+def tree_any(x):
+    return any(jax.tree_flatten(x)[0])
 
 
 def tree_update_ignorenoneleaves(x, y):
@@ -72,7 +83,8 @@ def tree_update_ignorenoneleaves(x, y):
     return z_tree
 
 
-def tree_homoreplace(tree, subtree, value):
+def _tree_homoreplace(tree, subtree, value):
+    ''' work with namedtuple-like node '''
     subtree_def = tree_structure(subtree)
     is_subtree_def = lambda x: tree_structure(x) == subtree_def
     return tree_map(lambda x: tree_map(lambda _: value, x) if is_subtree_def(x) else x,
@@ -80,25 +92,11 @@ def tree_homoreplace(tree, subtree, value):
                     is_leaf=is_subtree_def)
 
 
-def tree_homoreplace_multiple(tree, subtrees, value):
+def tree_homoreplace(tree, subtrees, value):
     # subtrees must be list
     if not isinstance(subtrees, list):
         subtrees = [subtrees]
-    return scan(lambda t, s: (tree_homoreplace(t, s, value), None), tree, subtrees)[0]
-
-
-def namedtuple(name, keys, *args, **kwargs):
-    ''' patch collections.namedtuple with extra pytree utilites '''
-    return type(name, (_namedtuple(name, keys, *args, **kwargs),), {'apply': tree_homoreplace_multiple})
-
-
-def isnamedtupleinstance(x):
-    t = type(x)
-    # b = t.__bases__
-    # if len(b) != 1 or b[0] != tuple: return False
-    f = getattr(t, '_fields', None)
-    if not isinstance(f, tuple): return False
-    return all(type(n)==str for n in f)
+    return scan(lambda t, s: (_tree_homoreplace(t, s, value), None), tree, subtrees)[0]
 
 
 pprint = namedtuple_pprint.PrettyPrinter(indent=2).pprint
