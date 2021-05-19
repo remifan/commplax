@@ -7,6 +7,8 @@ from typing import NamedTuple, Callable, Optional, Tuple, Any
 from collections import namedtuple
 from commplax import util, comm, xcomm, xop, adaptive_filter as af
 from jax.nn.initializers import ones, zeros, glorot_normal, normal
+from jax.nn import (relu, log_softmax, softmax, softplus, sigmoid, elu,
+                    leaky_relu, selu, gelu, normalize)
 
 
 class Layer(NamedTuple):
@@ -337,7 +339,7 @@ def MSE():
 
 @layer
 def BatchNorm(axis=(0,), epsilon=1e-5, center=False, scale=False,
-              beta_init=zeros, gamma_init=ones, normalizer=jax.nn.normalize):
+              beta_init=zeros, gamma_init=ones, normalizer=normalize):
     """Layer construction function for a batch normalization layer."""
     _beta_init = lambda rng, shape: beta_init(rng, shape) if center else ()
     _gamma_init = lambda rng, shape: gamma_init(rng, shape) if scale else ()
@@ -364,6 +366,19 @@ def elementwise(fun, **fun_kwargs):
     init = lambda rng, input_shape: input_shape
     apply = lambda inputs, *args, **kwargs: fun(inputs, **fun_kwargs)
     return init, apply
+
+
+Tanh = elementwise(jnp.tanh)
+Relu = elementwise(relu)
+Exp = elementwise(jnp.exp)
+LogSoftmax = elementwise(log_softmax, axis=-1)
+Softmax = elementwise(softmax, axis=-1)
+Softplus = elementwise(softplus)
+Sigmoid = elementwise(sigmoid)
+Elu = elementwise(elu)
+LeakyRelu = elementwise(leaky_relu)
+Selu = elementwise(selu)
+Gelu = elementwise(gelu)
 
 
 @layer
@@ -429,6 +444,27 @@ def FanOutAxis(axis=-1):
 
     trange = lambda trangein=TRANGE0: (trangein,)
     return init, apply, trange
+
+
+@fnlayer
+def Dropout(rate, mode='train'):
+  """Layer construction function for a dropout layer with given rate."""
+  def init_fun(rng, input_shape):
+    return input_shape, ()
+  def apply_fun(weights, inputs, **kwargs):
+    rng = kwargs.get('rng', None)
+    if rng is None:
+      msg = ("Dropout layer requires apply_fun to be called with a PRNG key "
+             "argument. That is, instead of `apply_fun(weights, inputs)`, call "
+             "it like `apply_fun(params, inputs, rng)` where `rng` is a "
+             "jax.random.PRNGKey value.")
+      raise ValueError(msg)
+    if mode == 'train':
+      keep = random.bernoulli(rng, rate, inputs.shape)
+      return jnp.where(keep, inputs / rate, 0)
+    else:
+      return inputs
+  return init_fun, apply_fun
 
 
 # Composing layers via combinators

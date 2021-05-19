@@ -297,7 +297,7 @@ def dbp_params(
     span_length,                                      # length of each fiber span [m]
     spans,                                            # number of fiber spans
     freqs,                                            # resulting size of linear operator
-    launch_power=30,                                  # launch power [dBm]
+    launch_power=0,                                   # launch power [dBm]
     steps_per_span=1,                                 # steps per span
     virtual_spans=None,                               # number of virtual spans
     carrier_frequency=299792458/1550E-9,              # carrier frequency [Hz]

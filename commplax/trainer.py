@@ -44,6 +44,7 @@ def supervised(model: cl.Layer,
                loss_metric: cl.Layer=cl.MSE(),
                input_shape=(None, 2),
                init_weights=None,
+               init_state=None,
                trainable=tmap.train_all,
                optimizer=cxopt.adam(1e-5),
                freeze_weights=False,
@@ -52,6 +53,7 @@ def supervised(model: cl.Layer,
                n_iter=None,
                n_epoch=1,
                jit_backend='cpu',
+               tqdm_kwargs={},
                state_schedule=lambda i, s0, s: s):
 
     assert isinstance(model, cl.Layer), "invalid model"
@@ -62,11 +64,14 @@ def supervised(model: cl.Layer,
         loss_metric,
     )
 
-    weights0, model_state0 = model_loss.init(rng, (50000, input_shape[1]))[1:]
-    opt_init, opt_update, get_params = optimizer
-    weights = weights0 if init_weights is None else init_weights
+    weights0, state0 = model_loss.init(rng, (50000, input_shape[1]))[1:]
+    weights0 = weights0 if init_weights is None else init_weights
+    state0 = state0 if init_state is None else init_state
     # assertvar(weights.model, weights0.model, "invalid initial model weights") # too strict
-    opt_state = opt_init(weights)
+    opt_init, opt_update, get_params = optimizer
+    opt_state = opt_init(weights0)
+    weights = get_params(opt_state)
+    state = state0
     w_trainable = trainable(util.tree_full(weights, True))
 
     TrainResult = namedtuple('TrainResult', 'weights aux')
@@ -76,7 +81,7 @@ def supervised(model: cl.Layer,
         batch_num = 0
         batch_gens = []
         for _ in range(n_epoch):
-            batch_num, batch_gen = batch_generator(model_loss, s_batch)
+            batch_num, batch_gen = batch_generator(model, s_batch)
             batch_gens.append(batch_gen)
         assert batch_num > 0, "empty batch"
 
@@ -84,28 +89,27 @@ def supervised(model: cl.Layer,
         freeze_weights = cxopt.make_schedule(freeze_weights)
 
         @partial(jit, backend=jit_backend)
-        def step(i, opt_state: cxopt.OptimizerState, model_state, batch):
+        def step(i, opt_state: cxopt.OptimizerState, state, batch):
             inputs, targets, aux = (*batch, ())[:3]
             kwargs = {} if len(aux) == 0 else aux._asdict()
             weights = get_params(opt_state)
-            (loss, model_state), g = cl.value_and_grad(model_loss)(weights, inputs, model_state, truth=targets, **kwargs)
+            (loss, state), g = cl.value_and_grad(model_loss)(weights, inputs, state, truth=targets, **kwargs)
             opt_state = opt_update(i, apply_trainable_grad(g, w_trainable, not freeze_weights(i)), opt_state)
-            return loss, g, model_state, opt_state
+            return loss, g, state, opt_state
 
         loss = None
         grad = None
         i_iter = 0
-        model_state = model_state0
         for i_epoch in range(n_epoch):
-            model_state = state_schedule(i_epoch, model_state0, model_state)
-            for _ in trange(min(n_iter, batch_num), desc='epoch %d/%d' % (i_epoch, n_epoch), leave=True):
-                loss, grad, model_state, opt_state = step(i_iter,
+            state = state_schedule(i_epoch, state0, state)
+            for _ in trange(min(n_iter, batch_num), **util.passkwargs(tqdm_kwargs, desc='epoch %d/%d' % (i_epoch, n_epoch))):
+                loss, grad, state, opt_state = step(i_iter,
                                                           opt_state,
-                                                          model_state,
+                                                          state,
                                                           next(batch_gens[i_epoch]))
                 i_iter += 1
                 n_iter -= 1
-                yield TrainResult(get_params(opt_state), AuxOut(float(loss), grad, model_state))
+                yield TrainResult(get_params(opt_state), AuxOut(float(loss), grad, state))
     else:
-        yield TrainResult(get_params(opt_state), AuxOut(None, None, None))
+        yield TrainResult(weights, AuxOut(None, None, state))
 

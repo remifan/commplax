@@ -1,7 +1,6 @@
 import jax
 from jax.tree_util import tree_map, tree_flatten, tree_unflatten, tree_structure
-from collections import namedtuple as _namedtuple
-from commplax.third_party import namedtuple_pprint
+from commplax.third_party import namedtuple_pprint, flax_serialization
 
 
 def getdev(x):
@@ -101,3 +100,28 @@ def tree_homoreplace(tree, subtrees, value):
 
 pprint = namedtuple_pprint.PrettyPrinter(indent=2).pprint
 
+
+def passkwargs(kwargs_dict, **default_kwargs):
+    assert isinstance(kwargs_dict, dict)
+    kwargs_dict = dict(kwargs_dict)
+    for k, v in default_kwargs.items():
+        kwargs_dict.update({k: kwargs_dict.pop(k, v)})
+    return kwargs_dict
+
+
+# shortcuts of flax's serilization API
+tree_serialize = flax_serialization.msgpack_serialize
+tree_restore = flax_serialization.msgpack_restore
+from_bytes = flax_serialization.from_bytes
+to_bytes = flax_serialization.to_bytes
+
+
+def dump(obj, filename):
+    with open(filename, 'wb') as outfile:
+        outfile.write(to_bytes(obj))
+
+
+def load(target, filename):
+    with open(filename, 'rb') as datfile:
+        obj = from_bytes(target, datfile.read())
+    return obj
