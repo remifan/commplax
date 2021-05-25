@@ -12,7 +12,7 @@ setup(name='commplax',
         'scipy',
         'pandas',
         'seaborn',
-        'msgpack'
+        'msgpack',
         'tqdm',
         'quantumrandom'
     ],
