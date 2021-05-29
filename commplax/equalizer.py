@@ -146,7 +146,7 @@ def _qamfoe(x, local, fitkind, lfoe_fs, lfoe_st):
 
 def ekfcpr(signal, truth=None, modformat='16QAM', const=None, backend='cpu'):
     y = jnp.asarray(signal)
-    x = jnp.asarray(truth)
+    x = jnp.asarray(truth) if truth is not None else truth
     if const is None:
         const=comm.const(modformat, norm=True)
     const = jnp.asarray(const)

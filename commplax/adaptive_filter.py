@@ -3,8 +3,7 @@ import functools
 import numpy as np
 from typing import Any, Callable, NamedTuple, Tuple, Union
 from functools import partial
-from collections import namedtuple
-from jax import jit, numpy as jnp
+from jax import numpy as jnp
 from commplax import comm, xop, cxopt
 from jax.tree_util import tree_flatten, tree_unflatten
 
@@ -27,7 +26,7 @@ class AdaptiveFilter(NamedTuple):
     eval_fn: ApplyFn
 
 
-def adaptive_filter(af_maker, trainable=False):
+def adaptive_filter(af_maker: Callable, trainable=False):
     @functools.wraps(af_maker)
     def _af_maker(*args, **kwargs):
         init, update, apply = af_maker(*args, **kwargs)

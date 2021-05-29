@@ -1,6 +1,7 @@
 import jax
-from jax.tree_util import tree_map, tree_flatten, tree_unflatten, tree_structure
+from jax.tree_util import tree_map, tree_flatten, tree_unflatten, tree_structure, treedef_is_leaf
 from commplax.third_party import namedtuple_pprint, flax_serialization
+from functools import partial, update_wrapper
 
 
 def getdev(x):
@@ -45,12 +46,21 @@ def chain(fs, init, length=None):
     return ret
 
 
+def wrapped_partial(func, *args, **kwargs):
+    partial_func = partial(func, *args, **kwargs)
+    update_wrapper(partial_func, func)
+    return partial_func
+
+
+def none_is_leaf(n): return treedef_is_leaf(tree_structure(n))
+
+
 def tree_shape(x):
     return tree_map(lambda x: x.shape, x)
 
 
-def tree_full(weights, value=True):
-    return tree_map(lambda _: value, weights)
+def tree_full(tree, value, is_leaf=none_is_leaf):
+    return tree_map(lambda _: value, tree, is_leaf=is_leaf)
 
 
 def tree_all(x):
@@ -59,6 +69,14 @@ def tree_all(x):
 
 def tree_any(x):
     return any(jax.tree_flatten(x)[0])
+
+
+def tree_transpose(list_of_trees):
+  """Convert a list of trees of identical structure into a single tree of lists."""
+  return jax.tree_multimap(lambda *xs: list(xs), *list_of_trees)
+
+
+tree_map_nl = partial(tree_map, is_leaf=none_is_leaf)
 
 
 def tree_update_ignorenoneleaves(x, y):
@@ -82,20 +100,22 @@ def tree_update_ignorenoneleaves(x, y):
     return z_tree
 
 
-def _tree_homoreplace(tree, subtree, value):
+def _tree_replace(tree, subtree, value, none_leaf=True):
     ''' work with namedtuple-like node '''
     subtree_def = tree_structure(subtree)
     is_subtree_def = lambda x: tree_structure(x) == subtree_def
-    return tree_map(lambda x: tree_map(lambda _: value, x) if is_subtree_def(x) else x,
+    return tree_map(lambda x: tree_map(lambda _: value,
+                                       x,
+                                       is_leaf=none_is_leaf if none_leaf else None) if is_subtree_def(x) else x,
                     tree,
                     is_leaf=is_subtree_def)
 
 
-def tree_homoreplace(tree, subtrees, value):
+def tree_replace(tree, subtrees, value, none_leaf=True):
     # subtrees must be list
     if not isinstance(subtrees, list):
         subtrees = [subtrees]
-    return scan(lambda t, s: (_tree_homoreplace(t, s, value), None), tree, subtrees)[0]
+    return scan(lambda t, s: (_tree_replace(t, s, value, none_leaf=none_leaf), None), tree, subtrees)[0]
 
 
 pprint = namedtuple_pprint.PrettyPrinter(indent=2).pprint

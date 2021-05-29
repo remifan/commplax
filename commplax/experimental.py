@@ -79,3 +79,7 @@ def _ifwmtriplets(y, n, m):
     return jnp.stack([nlh, nlv], axis=-1)
 
 
+# x0, t0 = scope.child(conv1d, name='Dx_%d' % i)(Signal(x[:, 0], t[:, 0]), taps=dtaps, kernel_init=d_init)
+# x1, t1 = scope.child(conv1d, name='Dy_%d' % i)(Signal(x[:, 1], t[:, 1]), taps=dtaps, kernel_init=d_init)
+# x = jnp.stack([x0, x1], axis=-1)
+# t = jnp.stack([t0, t1], axis=-1)
