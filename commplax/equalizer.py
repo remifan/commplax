@@ -1,3 +1,18 @@
+# Copyright 2021 The Commplax Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 import numpy as np
 from jax import jit, device_put, numpy as jnp, lax
 from commplax import xop, comm, xcomm, util, adaptive_filter as af
@@ -34,7 +49,7 @@ def cdcomp(signal, sr, CD, fc=193.4e12, polmux=True, mode='SAME', backend=None):
     return tddbp(signal, sr, 0., dist, 1, mintaps, xi=0., D=D, polmux=polmux, mode=mode, backend=backend)
 
 
-def modulusmimo(signal, sps=2, taps=19, cma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
+def modulusmimo(signal, sps=2, taps=32, lr=2**-14, cma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
     '''
     Adaptive MIMO equalizer for M-QAM signal
     '''
@@ -50,18 +65,18 @@ def modulusmimo(signal, sps=2, taps=19, cma_samples=20000, modformat='16QAM', co
     Rs = np.array(np.unique(np.abs(const)))
 
     return jit(_modulusmimo,
-               static_argnums=(3, 4, 5,),
-               backend=backend)(y, R2, Rs, sps, taps, cma_samples)
+               static_argnums=(3, 4, 5),
+               backend=backend)(y, R2, Rs, sps, taps, cma_samples, lr)
 
 
-def _modulusmimo(y, R2, Rs, sps, taps, cma_samples):
+def _modulusmimo(y, R2, Rs, sps, taps, cma_samples, lr):
     # prepare adaptive filters
 
     y = jnp.asarray(y)
 
     dims = y.shape[-1]
     cma_init, cma_update, _ = af.mucma(R2=R2, dims=dims)
-    rde_init, rde_update, rde_map = af.rde(Rs=Rs, dims=dims)
+    rde_init, rde_update, rde_map = af.rde(Rs=Rs, lr=lr, dims=dims)
 
     # framing signal to enable parallelization (a.k.a `jax.vmap`)
     yf = af.frame(y, taps, sps)
@@ -76,7 +91,7 @@ def _modulusmimo(y, R2, Rs, sps, taps, cma_samples):
     ws = jnp.concatenate([ws1, ws2], axis=0)
     x_hat = rde_map(ws, yf)
 
-    return x_hat, loss, ws
+    return x_hat, ws, loss
 
 
 def lmsmimo(signal, truth, sps=2, taps=31,

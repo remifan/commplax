@@ -1,3 +1,18 @@
+# Copyright 2021 The Commplax Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -63,7 +78,7 @@ def waveform(x, axes=None):
     axes[1].plot([x.imag.mean().tolist(),] * len(x))
 
 
-def desc_filter(w, H, ax=None, colors=None, legend=None, phase=True):
+def desc_filter(w, H, ax=None, colors=None, legend=None, Hermitian=False, phase=True):
     if ax is None:
         fig = plt.figure()
         ax1 = plt.gca()
@@ -75,20 +90,26 @@ def desc_filter(w, H, ax=None, colors=None, legend=None, phase=True):
     if H.ndim == 1:
         H = H[None,:]
 
+    if Hermitian:
+        phase = False
+
     lgd   = tuple(map(str, np.arange(len(H)))) if legend is None else legend
     lgd   = [lgd] if not isinstance(lgd, list) and not isinstance(lgd, tuple) else lgd
     colors = [colors] * len(H) if colors is None else colors
 
     for H_,i in zip(H, range(len(H))):
-        ax1.plot(w, abs(H_), color=colors[i])
-        ax1.set_ylabel('amp.')
-        ax1.set_xlabel('norm. freq.')
+        if Hermitian:
+            ax1.plot(w, abs(H_) * np.sign(np.exp(1j * np.unwrap(np.angle(H_))).real), color=colors[i])
+        else:
+            ax1.plot(w, abs(H_), color=colors[i])
+        ax1.set_ylabel('amplitude (a.u.)')
+        ax1.set_xlabel('freq. (Hz)')
 
         if phase:
             if ax2 is None:
                 ax2 = ax1.twinx()
             ax2.plot(w, np.unwrap(np.angle(H_)), '--', color=colors[i], alpha=0.4)
-            ax2.set_ylabel('phs.')
+            ax2.set_ylabel('phase (rad)')
     ax1.legend(lgd, loc='best')
 
 
@@ -106,7 +127,7 @@ def lpvssnr(LP, S, label=None, ax=None, show_std=True, show_ex=True):
     if show_std:
         ax.fill_between(LP, S[:, 0] - S[:, 1], S[:, 0] + S[:, 1], alpha=0.2)
     ax.legend()
-    ax.set_xlabel('LP (dBm)')
+    ax.set_xlabel('Launched Power (dBm)')
     ax.set_ylabel('SNR (dB)')
 
 

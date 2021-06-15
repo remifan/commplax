@@ -1,3 +1,18 @@
+# Copyright 2021 The Commplax Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 from flax.traverse_util import flatten_dict, unflatten_dict
 from flax.core import Scope, lift, freeze, unfreeze
 from jax import numpy as jnp
@@ -11,8 +26,10 @@ from typing import NamedTuple, Iterable, Callable, Optional, Any
 Array = Any
 
 
-# [Workaround]: ghost tuple as jitted slicer without specifying static_argnums.
+# [Workaround]: ghost tuple as jitted triplet without specifying static_argnums.
 # side effect: has to use . but [] to index
+# related: https://github.com/google/jax/issues/6853
+#          https://github.com/google/jax/pull/6273
 _empty = lambda shape: jnp.zeros((shape, 0) if not isinstance(shape, Iterable) else (*shape, 0))
 SigT = type('SigT',
             (namedtuple('SigT', 'a b c'),),
@@ -120,13 +137,13 @@ def fullsigval(inputs: Signal, fill_value=1):
 def vmap(f,
          variable_axes={
              'params': -1,
-             'static': None
+             'const': None
          },
          split_rngs={
              'params': True,
          },
          in_axes=(Signal(-1, None),), out_axes=Signal(-1, None)):
-    # in_axes needs to wrapped by a tuple, see Flax's lifted vmap implemetation:
+    # in_axes needs to be wrapped by a tuple, see Flax's lifted vmap implemetation:
     # https://github.com/google/flax/blob/82e9798274c927286878c4600b4b09650d1e7935/flax/core/lift.py#L395
     vf = lift.vmap(f,
                    variable_axes=variable_axes, split_rngs=split_rngs,
@@ -154,7 +171,7 @@ def conv1d(
     conv_fn = xop.convolve):
 
     x, t = signal
-    t = scope.variable('static', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel',
                      kernel_init,
                      (taps,), np.complex64)
@@ -174,7 +191,7 @@ def mimoconv1d(
     conv_fn=xop.convolve):
 
     x, t = signal
-    t = scope.variable('static', 't', conv1d_t, t, taps, rtap, 1, mode).value
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 1, mode).value
     h = scope.param('kernel', kernel_init, (taps, dims, dims), np.float32)
     y = xcomm.mimoconv(x, h, mode=mode, conv=conv_fn)
     return Signal(y, t)
@@ -193,7 +210,7 @@ def mimoaf(
     mimoinitargs={}):
 
     x, t = signal
-    t = scope.variable('static', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
+    t = scope.variable('const', 't', conv1d_t, t, taps, rtap, 2, 'valid').value
     x = xop.frame(x, taps, sps)
     mimo_init, mimo_update, mimo_apply = mimofn(train=train, **mimokwargs)
     state = scope.variable('af_state', 'mimoaf',
@@ -232,6 +249,7 @@ def fdbp(
 
     return Signal(x, t)
 
+# compositors
 
 def serial(*fs):
     def _serial(scope, inputs, **kwargs):

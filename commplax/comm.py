@@ -1,3 +1,18 @@
+# Copyright 2021 The Commplax Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 import re
 from jax.core import Value
 import numpy as np
@@ -552,7 +567,7 @@ def snrstat(y, x, frame_size=10000, L=None, eval_range=(0, 0), scale=1):
     return np.stack((sl_mean, sl_std, sl_mean - sl_min, sl_max - sl_mean))
 
 
-def firfreqz(h, sr=1, N=8192, t0=None):
+def firfreqz(h, sr=1, N=8192, t0=None, bw=None):
     if h.ndim == 1:
         h = h[None,:]
 
@@ -570,11 +585,16 @@ def firfreqz(h, sr=1, N=8192, t0=None):
 
     w = (w + np.pi) % (2 * np.pi) - np.pi
 
-    H = np.fft.fftshift(H, axes=-1)
+    H = np.squeeze(np.fft.fftshift(H, axes=-1))
     w = np.fft.fftshift(w, axes=-1) * sr / 2 / np.pi
+
+    if bw is not None:
+        s = int((sr - bw) / sr / 2 * len(w))
+        w = w[s: -s]
+        H = H[..., s: -s]
 
     # w = np.fft.fftshift(np.fft.fftfreq(H.shape[-1], 1/sr))
 
-    return w, np.squeeze(H)
+    return w, H
 
 

@@ -1,7 +1,27 @@
+# Copyright 2021 The Commplax Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+import re
+import os
 import jax
 from jax.tree_util import tree_map, tree_flatten, tree_unflatten, tree_structure, treedef_is_leaf
-from commplax.third_party import namedtuple_pprint, flax_serialization
+from commplax.third_party import namedtuple_pprint
 from functools import partial, update_wrapper
+from flax.traverse_util import flatten_dict, unflatten_dict
+from flax.core import freeze, unfreeze
+from flax import serialization
 
 
 def getdev(x):
@@ -50,6 +70,38 @@ def wrapped_partial(func, *args, **kwargs):
     partial_func = partial(func, *args, **kwargs)
     update_wrapper(partial_func, func)
     return partial_func
+
+
+def dict_split(d, paths, fullmatch=True):
+    match = re.fullmatch if fullmatch else re.match
+    flat_d = flatten_dict(unfreeze(d))
+    matched = []
+    for p in paths:
+        for k in flat_d.keys():
+            if len(p) <= len(k) and all(
+                    map(lambda a, b: bool(match(a, b)), p, k[:len(p)])):
+                matched.append(k)
+    x = {}
+    y = {}
+    for k, v in flat_d.items():
+        if k in matched:
+            x[k] = v
+        else:
+            y[k] = v
+    return freeze(unflatten_dict(x)), freeze(unflatten_dict(y))
+
+
+def dict_merge(x, y):
+    flat_x = flatten_dict(unfreeze(x))
+    flat_y = flatten_dict(unfreeze(y))
+    flat_z = {**flat_x, **flat_y}
+    return freeze(unflatten_dict(flat_z))
+
+
+def dict_map(f, d, paths=[]):
+    d0, d1 = dict_split(d, paths)
+    d0 = tree_map(f, d0)
+    return dict_merge(d0, d1)
 
 
 def none_is_leaf(n): return treedef_is_leaf(tree_structure(n))
@@ -129,19 +181,18 @@ def passkwargs(kwargs_dict, **default_kwargs):
     return kwargs_dict
 
 
-# shortcuts of flax's serilization API
-tree_serialize = flax_serialization.msgpack_serialize
-tree_restore = flax_serialization.msgpack_restore
-from_bytes = flax_serialization.from_bytes
-to_bytes = flax_serialization.to_bytes
+def save_variable(var, path):
+    msg = serialization.msgpack_serialize(unfreeze(var))
+    if not os.path.splitext(path)[1]:
+        path += '.msgpack'
+    with open(path, 'wb') as f:
+        f.write(msg)
 
 
-def dump(obj, filename):
-    with open(filename, 'wb') as outfile:
-        outfile.write(to_bytes(obj))
+def load_variable(path):
+    if not os.path.splitext(path)[1]:
+        path += '.msgpack'
+    with open(path, 'rb') as f:
+        msg = f.read()
+    return freeze(serialization.msgpack_restore(msg))
 
-
-def load(target, filename):
-    with open(filename, 'rb') as datfile:
-        obj = from_bytes(target, datfile.read())
-    return obj

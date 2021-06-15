@@ -1,3 +1,18 @@
+# Copyright 2021 The Commplax Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 import numpy as np
 from jax import lax, jit, vmap, numpy as jnp, device_put
 from jax.ops import index, index_add, index_update
@@ -74,7 +89,7 @@ def _conv1d_lax(signal, kernel, mode):
 
     return x[0,:,0]
 
-
+# TODO apply lru_cache?
 def _largest_prime_factor(n):
     '''brute-force finding of greatest prime factor of integer number.
     '''
@@ -430,9 +445,10 @@ def _convolve(a, v, mode, method):
         raise ValueError('invalid method')
 
     if method == 0:
+        # jnp.convolve does not support complex value yet, yet is slightly faster than conv1d_lax on float
         conv = jnp.convolve if isfloat(a) and isfloat(v) else conv1d_lax
     else:
-        # tested not bad on my cpu/gpu. TODO fine tune by interacting with overlap-add factor
+        # simple switch tested not bad on my cpu/gpu. TODO fine tune by interacting with overlap-add factor
         conv = conv1d_fft_oa if a.shape[0] >= 500 and a.shape[0] / v.shape[0] >= 50 else fftconvolve
 
     return conv(a, v, mode=mode)
