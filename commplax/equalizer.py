@@ -159,6 +159,30 @@ def _qamfoe(x, local, fitkind, lfoe_fs, lfoe_st):
     return x, fo
 
 
+def framekfcpr(signal, truth=None, n=100, w0=None, modformat='16QAM', const=None, backend='cpu'):
+    y = jnp.asarray(signal)
+    x = jnp.asarray(truth) if truth is not None else truth
+    if const is None:
+        const=comm.const(modformat, norm=True)
+    const = jnp.asarray(const)
+    return jit(_framekfcpr, backend=backend, static_argnums=2)(y, x, n, w0, const)
+
+
+def _framekfcpr(y, x, n, w0, const):
+    dims = y.shape[-1]
+    cpr_init, cpr_update, cpr_map = af.array(af.frame_cpr_kf, dims)(const=const)
+
+    yf = xop.frame(y, n, n)
+    xf = xop.frame(x, n, n) if x is not None else x
+    if w0 is None:
+        w0 = xcomm.foe_mpowfftmax(y[:5000])[0].mean()
+    cpr_state = cpr_init(w0=w0)
+    _, (fo, phif) = af.iterate(cpr_update, 0, cpr_state, yf, xf, truth_ndim=3)[1]
+    xhat = cpr_map(phif, yf).reshape((-1, dims))
+    phi = phif.reshape((-1, dims))
+    return xhat, (fo, phi)
+
+
 def ekfcpr(signal, truth=None, modformat='16QAM', const=None, backend='cpu'):
     y = jnp.asarray(signal)
     x = jnp.asarray(truth) if truth is not None else truth

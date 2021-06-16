@@ -170,12 +170,20 @@ def foe_mpowfftmax(x, M=4, sr=2*jnp.pi):
     h  = jnp.abs(X4)**2
     f  = jnp.argmax(h, axis=0)
     N  = len(h)
-
     f = jnp.where(f >= N / 2, f - N, f)
-
     fo_hat = f / N * sr / 4
-
     return fo_hat, h
+
+
+def foe_daxcorr(y, x, L=100):
+    N = y.shape[0]
+    if N < L:
+        raise TypeError('signal length %d is less then xcorr length %d' % (N, L))
+    s = y * x.conj() # remove modulated data phase
+    sf = xop.frame(s, L, L)
+    sf2 = sf[:-1]
+    sf1 = sf[1:]
+    return jnp.mean(jnp.angle(sf1 * sf2.conj())) / L
 
 
 def measure_cd(x, sr, start=-0.25, end=0.25, bins=2000, wavlen=1550e-9):

@@ -4,12 +4,11 @@ import numpy as np
 from typing import Any, Callable, NamedTuple, Tuple, Union
 from functools import partial
 from jax import numpy as jnp
-from commplax import comm, xop, cxopt
+from commplax import comm, xcomm, xop, cxopt
 from jax.tree_util import tree_flatten, tree_unflatten
 
 Array = Any
 Params = Any
-State = Any   # internal State
 State = Any   # internal State
 Signal = Any # Gradient updates are of the same type as parameters
 AFState = Any
@@ -100,10 +99,13 @@ def iterate(update: UpdateFn,
             state: AFState,
             signal: Signal,
             truth=None,
+            truth_ndim=2,
             device=None):
     steps = step0 + jnp.arange(signal.shape[0])
-    truth = jnp.zeros((0, signal.shape[-1]), dtype=signal.dtype) if truth is None else truth[:signal.shape[0]]
-    truth = jnp.pad(truth, [[0, signal.shape[0] - truth.shape[0]], [0, 0]])
+    # pad dummy truth
+    truth = jnp.zeros((0, *signal.shape[1 - truth_ndim:]), dtype=signal.dtype) if truth is None else truth[:signal.shape[0]]
+    padw_data_axes = ((0, 0),) * (truth_ndim - 1)
+    truth = jnp.pad(truth, ((0, signal.shape[0] - truth.shape[0]), *padw_data_axes))
     xs = (steps, signal, truth)
     return steps[-1], xop.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs, jit_device=device)
 
@@ -413,6 +415,69 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
     return AdaptiveFilter(init, update, apply)
 
 
+@partial(adaptive_filter)
+def frame_cpr_kf(Q=jnp.array([[0,    0],
+                              [0, 1e-8]]),
+                 R=jnp.array([[1e-2, 0],
+                              [0, 1e-3]]),
+                 const=comm.const("16QAM", norm=True),
+                 akf=True,
+                 alpha=0.99):
+    '''
+    frame-by-frame coarse carrier phsae recovery using Kalman filter, can tolerate 0.1 * baudrate
+    frequency offset[1].
+    Attention: needs proper initialization of FO[1]
+    References:
+    [1] Inoue, Takashi, and Shu Namiki. "Carrier recovery for M-QAM signals based on
+        a block estimation process with Kalman filter." Optics express 22.13 (2014): 15376-15387.
+    [2] Akhlaghi, Shahrokh, Ning Zhou, and Zhenyu Huang. "Adaptive adjustment of noise
+        covariance in Kalman filter for dynamic state estimation." 2017 IEEE power & energy
+        society general meeting. IEEE, 2017.
+    '''
+    const = jnp.asarray(const)
+
+    def init(w0=0):
+        z0 = jnp.array([[0], [w0]], dtype=jnp.float32)
+        P0 = jnp.zeros((2, 2), dtype=jnp.float32)
+        state0 = (z0, P0, Q)
+        return state0
+
+    def update(i, state, y):
+        z_c, P_c, Q = state
+
+        N = y.shape[0] # block size
+        A = jnp.array([[1, N],
+                       [0, 1]])
+        I = jnp.eye(2)
+        n = (jnp.arange(N) - (N - 1) / 2)
+
+        z_p = A @ z_c
+        P_p = A @ P_c @ A.T + Q
+        phi_p = z_p[0, 0] + n * z_p[1, 0]  # linear approx.
+        s_p = y * jnp.exp(-1j * phi_p)
+        d = const[jnp.argmin(jnp.abs(const[None, :] - s_p[:, None]), axis=-1)]
+        scd_p = s_p * d.conj()
+        sumscd_p = jnp.sum(scd_p)
+        e = jnp.array([[jnp.arctan(sumscd_p.imag / sumscd_p.real)],
+                       [(jnp.sum(n * scd_p)).imag / (jnp.sum(n * n * scd_p)).real]])
+
+        G = P_p @ jnp.linalg.pinv((P_p + R))
+        z_c = z_p + G @ e
+        P_c = (I - G) @ P_p
+
+        Q = alpha * Q + (1 - alpha) * (G @ e @ e.T @ G) if akf else Q
+
+        out = (z_p[1, 0], phi_p)
+        state = (z_c, P_c, Q)
+
+        return state, out
+
+    def apply(phis, ys):
+        return jax.vmap(lambda y, phi: y * jnp.exp(-1j * phi))(ys, phis)
+
+    return AdaptiveFilter(init, update, apply)
+
+
 @partial(adaptive_filter, trainable=True)
 def cpane_ekf(train=False,
               alpha=0.99,
@@ -422,6 +487,7 @@ def cpane_ekf(train=False,
               akf=True,
               const=comm.const("16QAM", norm=True)):
     '''
+    symbol-by-symbol fine carrier phsae recovery using extended Kalman filter
     References:
     [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
         of phase and amplitude noise in coherent QAM systems. Optics express, 24(6), pp.6391-6401.
@@ -458,7 +524,7 @@ def cpane_ekf(train=False,
         Psi_c = Psi_p + K * v
         P_c = (1. - K * H) * P_p
         e = y - d * jnp.exp(1j * Psi_c)
-        Q = alpha * Q + (1. - alpha) * K * v * v.conj() * K.conj() if akf else Q
+        Q = alpha * Q + (1 - alpha) * K * v * v.conj() * K.conj() if akf else Q
         R = alpha * R + (1 - alpha) * (e * e.conj() + H * P_p * H.conj()) if akf else R
 
         state = (Psi_c, P_c, Psi_a, Q, R)
