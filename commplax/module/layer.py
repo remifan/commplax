@@ -49,14 +49,32 @@ def vmap(layer, **vmap_kwargs):
     return partial(layer, layer_transform=partial(core.vmap, **vmap_kwargs))
 
 
+BatchPowerNorm = make_layer(core.batchpowernorm, mutable=('norm',))
 Conv1d = make_layer(core.conv1d)
 MIMOConv1d = make_layer(core.mimoconv1d)
 MIMOAF = make_layer(core.mimoaf, mutable=('af_state',))
 FDBP = make_layer(core.fdbp)
 SimpleFn = make_layer(core.simplefn)
+MIMOFOEAf = make_layer(core.mimofoeaf, mutable=('af_state',))
+Identity = make_layer(core.identity)
+FanOut = make_layer(core.fanout)
 
 
 def Serial(*layers, name='serial'):
+    names, _, _, core_funs, mutables = zip(*layers)
+    core_fun = core.serial(*zip(names, core_funs))
+    mutable = reduce(operator.add, list(mutables))
+
+    def init_fun(rng, *args, **kwargs):
+        return init(core_fun)(rng, *args, **kwargs)
+
+    def apply_fun(params, *args, **kwargs):
+        return apply(core_fun, mutable=mutable)(params, *args, **kwargs)
+
+    return Layer(name, init_fun, apply_fun, core_fun, mutable)
+
+
+def Parallel(*layers, name='parallel'):
     names, _, _, core_funs, mutables = zip(*layers)
     core_fun = core.serial(*zip(names, core_funs))
     mutable = reduce(operator.add, list(mutables))

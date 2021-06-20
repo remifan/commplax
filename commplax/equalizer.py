@@ -76,7 +76,7 @@ def _modulusmimo(y, R2, Rs, sps, taps, cma_samples, lr):
 
     dims = y.shape[-1]
     cma_init, cma_update, _ = af.mucma(R2=R2, dims=dims)
-    rde_init, rde_update, rde_map = af.rde(Rs=Rs, lr=lr, dims=dims)
+    rde_init, rde_update, rde_map = af.rde(Rs=Rs, lr=lr)
 
     # framing signal to enable parallelization (a.k.a `jax.vmap`)
     yf = af.frame(y, taps, sps)

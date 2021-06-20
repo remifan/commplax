@@ -279,7 +279,7 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
 
 
 @partial(adaptive_filter, trainable=True)
-def rde(dims=2, lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
+def rde(lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
     '''
     References:
     [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
@@ -292,7 +292,7 @@ def rde(dims=2, lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM"
     if const is not None:
         Rs = jnp.array(jnp.unique(jnp.abs(const)))
 
-    def init(w0=None, taps=31, dtype=np.complex64):
+    def init(dims=2, w0=None, taps=32, dtype=np.complex64):
         if w0 is None:
             w0 = np.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
@@ -300,12 +300,12 @@ def rde(dims=2, lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM"
         return w0
 
     def update(i, w, inp):
-        u, Rx = inp
+        u, x = inp
 
         def loss_fn(w, u):
             v = r2c(mimo(w, u)[None,:])
             R2 = jnp.where(train(i),
-                           jnp.abs(Rx)**2,
+                           jnp.abs(x)**2,
                            Rs[jnp.argmin(
                                jnp.abs(Rs[:,None] * v / jnp.abs(v) - v),
                                axis=0)]**2)
@@ -324,8 +324,8 @@ def rde(dims=2, lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM"
 
 
 @partial(adaptive_filter, trainable=True)
-def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max=(50., 50.), eps=1e-8,
-          beta=0., const=comm.const("16QAM", norm=True), lockgain=False):
+def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max=(30., 30.),
+          eps=1e-8, beta=0., const=comm.const("16QAM", norm=True), lockgain=False):
     '''
     Enhancements
     - add bias term to handle varying DC component
@@ -355,7 +355,7 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
         w, f, s, b, fshat = state
         u, x = inp
 
-        # if lockgain(i): # for scalar lockgain only
+        # if lockgain: # for scalar lockgain only
         #     w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
         #     w /= (jnp.sqrt(jnp.sum(jnp.abs(w)**2, axis=(1, 2))))[:, None, None] + eps
         #     f /= jnp.abs(f) + eps
@@ -415,14 +415,15 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
     return AdaptiveFilter(init, update, apply)
 
 
-@partial(adaptive_filter)
+@partial(adaptive_filter, trainable=True)
 def frame_cpr_kf(Q=jnp.array([[0,    0],
-                              [0, 1e-8]]),
+                              [0, 1e-9]]),
                  R=jnp.array([[1e-2, 0],
                               [0, 1e-3]]),
                  const=comm.const("16QAM", norm=True),
-                 akf=True,
-                 alpha=0.99):
+                 train=False,
+                 akf=cxopt.piecewise_constant([10, 500], [False, True, False]),
+                 alpha=0.999):
     '''
     frame-by-frame coarse carrier phsae recovery using Kalman filter, can tolerate 0.1 * baudrate
     frequency offset[1].
@@ -435,6 +436,8 @@ def frame_cpr_kf(Q=jnp.array([[0,    0],
         society general meeting. IEEE, 2017.
     '''
     const = jnp.asarray(const)
+    train = cxopt.make_schedule(train)
+    akf = cxopt.make_schedule(akf)
 
     def init(w0=0):
         z0 = jnp.array([[0], [w0]], dtype=jnp.float32)
@@ -442,10 +445,11 @@ def frame_cpr_kf(Q=jnp.array([[0,    0],
         state0 = (z0, P0, Q)
         return state0
 
-    def update(i, state, y):
+    def update(i, state, inp):
         z_c, P_c, Q = state
+        y, x = inp
 
-        N = y.shape[0] # block size
+        N = y.shape[0] # frame size
         A = jnp.array([[1, N],
                        [0, 1]])
         I = jnp.eye(2)
@@ -455,7 +459,7 @@ def frame_cpr_kf(Q=jnp.array([[0,    0],
         P_p = A @ P_c @ A.T + Q
         phi_p = z_p[0, 0] + n * z_p[1, 0]  # linear approx.
         s_p = y * jnp.exp(-1j * phi_p)
-        d = const[jnp.argmin(jnp.abs(const[None, :] - s_p[:, None]), axis=-1)]
+        d = jnp.where(train(i), x, const[jnp.argmin(jnp.abs(const[None, :] - s_p[:, None]), axis=-1)])
         scd_p = s_p * d.conj()
         sumscd_p = jnp.sum(scd_p)
         e = jnp.array([[jnp.arctan(sumscd_p.imag / sumscd_p.real)],
@@ -465,7 +469,9 @@ def frame_cpr_kf(Q=jnp.array([[0,    0],
         z_c = z_p + G @ e
         P_c = (I - G) @ P_p
 
-        Q = alpha * Q + (1 - alpha) * (G @ e @ e.T @ G) if akf else Q
+        Q = jnp.where(akf(i),
+                      alpha * Q + (1 - alpha) * (G @ e @ e.T @ G),
+                      Q)
 
         out = (z_p[1, 0], phi_p)
         state = (z_c, P_c, Q)

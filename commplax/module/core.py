@@ -52,22 +52,24 @@ class Signal(NamedTuple):
         return self.t[0].shape[0], -self.t[0].shape[1]
 
     def __mul__(self, other):
-        if not isinstance(other, Signal):
-            return Signal(self.val * other, self.t)
-        else:
-            raise TypeError('not implemented')
+        Signal._check_type(other)
+        return Signal(self.val * other, self.t)
 
     def __add__(self, other):
-        if not isinstance(other, Signal):
-            return Signal(self.val + other, self.t)
-        else:
-            raise TypeError('not implemented')
+        Signal._check_type(other)
+        return Signal(self.val + other, self.t)
 
     def __sub__(self, other):
-        if not isinstance(other, Signal):
-            return Signal(self.val - other, self.t)
-        else:
-            raise TypeError('not implemented')
+        Signal._check_type(other)
+        return Signal(self.val - other, self.t)
+
+    def __truediv__(self, other):
+        Signal._check_type(other)
+        return Signal(self.val / other, self.t)
+
+    def __floordiv__(self, other):
+        Signal._check_type(other)
+        return Signal(self.val // other, self.t)
 
     def __imul__(self, other):
         return self * other
@@ -77,6 +79,16 @@ class Signal(NamedTuple):
 
     def __isub__(self, other):
         return self - other
+
+    def __itruediv__(self, other):
+        return self / other
+
+    def __ifloordiv__(self, other):
+        return self // other
+
+    @classmethod
+    def _check_type(cls, other):
+        assert not isinstance(other, cls), 'not implemented'
 
 
 def zeros(key, shape, dtype=jnp.float32): return jnp.zeros(shape, dtype)
@@ -128,6 +140,17 @@ def conv1d_t(t, taps, rtap, stride, mode):
     return newt((t.start + tslice[0]) // stride, (t.stop + tslice[1]) // stride, t.sps // stride)
 
 
+def conv1d_slicer(taps, rtap=None, stride=1, mode='valid'):
+    def slicer(signal):
+        x, xt = signal
+        yt = conv1d_t(xt, taps, rtap, stride, mode)
+        D = xt.sps // yt.sps
+        zt = newt(yt.start * D, yt.stop * D, xt.sps)
+        x = x[zt.start - xt.start: zt.stop - xt.stop]
+        return Signal(x, zt)
+    return slicer
+
+
 def fullsigval(inputs: Signal, fill_value=1):
     x, t = inputs
     full_shape = (x.shape[0] + t.start - t.stop,) + x.shape[1:]
@@ -159,6 +182,17 @@ def simplefn(scope, signal, fn=None, aux_inputs=None):
         aux_name, aux_init = aux_inputs
         aux += scope.variable('aux_inputs', aux_name, aux_init, signal).value,
     return fn(signal, *aux)
+
+
+def batchpowernorm(scope, signal, momentum=0.999, mode='train'):
+    running_mean = scope.variable('norm', 'running_mean',
+                                  lambda *_: 0. + jnp.ones(signal.val.shape[-1]), ())
+    if mode == 'train':
+        mean = jnp.mean(jnp.abs(signal.val)**2, axis=0)
+        running_mean.value = momentum * running_mean.value + (1 - momentum) * mean
+    else:
+        mean = running_mean.value
+    return signal / jnp.sqrt(mean)
 
 
 def conv1d(
@@ -197,6 +231,52 @@ def mimoconv1d(
     return Signal(y, t)
 
 
+def mimofoeaf(scope: Scope,
+              signal,
+              framesize=100,
+              w0=0,
+              train=False,
+              preslicer=lambda x: x,
+              foekwargs={},
+              mimofn=af.rde,
+              mimokwargs={},
+              mimoinitargs={}):
+
+    sps = 2
+    dims = 2
+    tx = signal.t
+    # MIMO
+    slisig = preslicer(signal)
+    auxsig = scope.child(mimoaf,
+                         mimofn=mimofn,
+                         train=train,
+                         mimokwargs=mimokwargs,
+                         mimoinitargs=mimoinitargs,
+                         name='MIMO4FOE')(slisig)
+    y, ty = auxsig # assume y is continuous in time
+    yf = xop.frame(y, framesize, framesize)
+
+    foe_init, foe_update, _ = af.array(af.frame_cpr_kf, dims)(**foekwargs)
+    state = scope.variable('af_state', 'framefoeaf',
+                           lambda *_: (0., 0, foe_init(w0)), ())
+    phi, af_step, af_stats = state.value
+
+    af_step, (af_stats, (wf, _)) = af.iterate(foe_update, af_step, af_stats, yf)
+    wp = wf.reshape((-1, dims)).mean(axis=-1)
+    w = jnp.interp(jnp.arange(y.shape[0] * sps) / sps,
+                   jnp.arange(wp.shape[0]) * framesize + (framesize - 1) / 2, wp) / sps
+    psi = phi + jnp.cumsum(w)
+    state.value = (psi[-1], af_step, af_stats)
+
+    # apply FOE to original input signal via linear extrapolation
+    psi_ext = jnp.concatenate([w[0] * jnp.arange(tx.start - ty.start * sps, 0) + phi,
+                               psi,
+                               w[-1] * jnp.arange(tx.stop - ty.stop * sps) + psi[-1]])
+
+    signal = signal * jnp.exp(-1j * psi_ext)[:, None]
+    return signal
+
+
 def mimoaf(
     scope: Scope,
     signal,
@@ -223,7 +303,7 @@ def mimoaf(
     af_step, af_stats = state.value
     af_step, (af_stats, (af_weights, _)) = af.iterate(mimo_update, af_step, af_stats, x, truth)
     y = mimo_apply(af_weights, x)
-    state.value = (af_step + x.shape[0],) + (af_stats,)
+    state.value = (af_step, af_stats)
     return Signal(y, t)
 
 
@@ -248,6 +328,15 @@ def fdbp(
         x = jnp.exp(1j * c) * x[t.start - td.start: t.stop - td.stop + x.shape[0]]
 
     return Signal(x, t)
+
+
+def identity(scope, inputs):
+    return inputs
+
+
+def fanout(scope, inputs, num):
+    return (inputs,) * num
+
 
 # compositors
 
