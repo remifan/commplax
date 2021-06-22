@@ -1,18 +1,18 @@
 # coding=utf-8
 """Install commplax."""
 
-# install Jax and Jaxlib mannually
-
 from setuptools import setup, find_packages
 
 setup(name='commplax',
     version='1.0',
     packages=find_packages(),
     install_requires=[
+        'jax==0.2.13',
+        'jaxlib=0.1.66',
+        'flax=0.3.4',
         'scipy',
         'pandas',
         'seaborn',
-        'msgpack',
         'tqdm',
         'quantumrandom'
     ],
