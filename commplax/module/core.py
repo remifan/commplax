@@ -13,40 +13,30 @@
 # limitations under the License.
 
 
+import numpy as np
+from jax import numpy as jnp
+from flax import struct
 from flax.traverse_util import flatten_dict, unflatten_dict
 from flax.core import Scope, lift, freeze, unfreeze
-from jax import numpy as jnp
-import numpy as np
-from collections import namedtuple
 from commplax import comm, xcomm, xop, adaptive_filter as af
 from commplax.util import wrapped_partial as wpartial
-from typing import NamedTuple, Iterable, Callable, Optional, Any
+from typing import Any, NamedTuple, Iterable, Callable, Optional
 
 
 Array = Any
 
 
-# [Workaround]: ghost tuple as jitted triplet without specifying static_argnums.
-# side effect: has to use . but [] to index
 # related: https://github.com/google/jax/issues/6853
-#          https://github.com/google/jax/pull/6273
-_empty = lambda shape: jnp.zeros((shape, 0) if not isinstance(shape, Iterable) else (*shape, 0))
-SigT = type('SigT',
-            (namedtuple('SigT', 'a b c'),),
-            {'__repr__': lambda self: '(start={}, stop={}, sps={})'.format(self.a.shape[0],
-                                                                           -self.b.shape[0],
-                                                                           self.c.shape[0]),
-             'start': property(lambda self: self.a.shape[0]),
-             'stop': property(lambda self: -self.b.shape[0]),
-             'sps': property(lambda self: self.c.shape[0])})
-def newt(start: int=0, stop: int=0, sps: int=2) -> SigT:
-    assert start >= 0 and stop <=0 and sps > 0
-    return SigT(_empty(start), _empty(-stop), _empty(sps))
+@struct.dataclass
+class SigTime:
+  start: int = struct.field(pytree_node=False)
+  stop: int = struct.field(pytree_node=False)
+  sps: int = struct.field(pytree_node=False)
 
 
 class Signal(NamedTuple):
     val: Array
-    t: Any = newt()
+    t: Any = SigTime(0, 0, 2)
 
     def taxis(self):
         return self.t[0].shape[0], -self.t[0].shape[1]
@@ -137,7 +127,7 @@ def conv1d_t(t, taps, rtap, stride, mode):
         tslice = (delay * stride, (delay + 1) * stride - taps)
     else:
         raise ValueError('invalid mode {}'.format(mode))
-    return newt((t.start + tslice[0]) // stride, (t.stop + tslice[1]) // stride, t.sps // stride)
+    return SigTime((t.start + tslice[0]) // stride, (t.stop + tslice[1]) // stride, t.sps // stride)
 
 
 def conv1d_slicer(taps, rtap=None, stride=1, mode='valid'):
@@ -145,7 +135,7 @@ def conv1d_slicer(taps, rtap=None, stride=1, mode='valid'):
         x, xt = signal
         yt = conv1d_t(xt, taps, rtap, stride, mode)
         D = xt.sps // yt.sps
-        zt = newt(yt.start * D, yt.stop * D, xt.sps)
+        zt = SigTime(yt.start * D, yt.stop * D, xt.sps)
         x = x[zt.start - xt.start: zt.stop - xt.stop]
         return Signal(x, zt)
     return slicer

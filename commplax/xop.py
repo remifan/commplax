@@ -445,7 +445,7 @@ def _convolve(a, v, mode, method):
         raise ValueError('invalid method')
 
     if method == 0:
-        # jnp.convolve does not support complex value yet, yet is slightly faster than conv1d_lax on float
+        # jnp.convolve does not support complex value yet, but is slightly faster than conv1d_lax on float inputs
         conv = jnp.convolve if isfloat(a) and isfloat(v) else conv1d_lax
     else:
         # simple switch tested not bad on my cpu/gpu. TODO fine tune by interacting with overlap-add factor

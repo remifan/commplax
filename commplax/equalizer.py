@@ -170,7 +170,7 @@ def framekfcpr(signal, truth=None, n=100, w0=None, modformat='16QAM', const=None
 
 def _framekfcpr(y, x, n, w0, const):
     dims = y.shape[-1]
-    cpr_init, cpr_update, cpr_map = af.array(af.frame_cpr_kf, dims)(const=const)
+    cpr_init, cpr_update, cpr_map = af.array(af.frame_cpr_kf, dims)(alpha=0.98, const=const)
 
     yf = xop.frame(y, n, n)
     xf = xop.frame(x, n, n) if x is not None else x

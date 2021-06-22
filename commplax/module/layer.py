@@ -14,7 +14,6 @@
 
 
 from flax.core import Scope, init, apply
-from jax import jit, random
 from functools import reduce
 from commplax.util import wrapped_partial as partial
 from typing import NamedTuple, Optional, Any

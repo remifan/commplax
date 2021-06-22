@@ -187,6 +187,14 @@ def mimoinitializer(taps, dims, dtype, initkind):
 
 @adaptive_filter
 def cma(lr=1e-4, R2=1.32, const=None):
+    '''
+    CMA blind MIMO equalizer
+    References:
+    [1] D. Godard, “Self-recovering equalization and carrier tracking in two-dimensional data
+        communication systems,” IEEE Trans. Commun., vol. 28, no. 11, pp. 1867–1875, Nov. 1980.
+    [2] K. Kikuchi, “Polarization-demultiplexing algorithm in the digital coherent receiver,”
+        in Proc. Digest 2008 IEEE/LEOS Summer Topical Meetings, Jul., pp. 101–102.
+    '''
     lr = cxopt.make_schedule(lr)
 
     if const is not None:
@@ -219,6 +227,7 @@ def cma(lr=1e-4, R2=1.32, const=None):
 @adaptive_filter
 def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
     '''
+    singularity-free blind MIMO equalizer
     References:
     [1] Papadias, Constantinos B., and Arogyaswami J. Paulraj. "A constant modulus algorithm
     for multiuser signal separation in presence of delay spread using antenna arrays."
@@ -299,20 +308,19 @@ def rde(lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=T
             w0[np.arange(dims), np.arange(dims), ctap] = 1.
         return w0
 
+    def loss_fn(w, u, x, i):
+        v = r2c(mimo(w, u)[None,:])
+        R2 = jnp.where(train(i),
+                       jnp.abs(x)**2,
+                       Rs[jnp.argmin(
+                           jnp.abs(Rs[:,None] * v / jnp.abs(v) - v),
+                           axis=0)]**2)
+        l = jnp.sum(jnp.abs(R2 - jnp.abs(v[0,:])**2))
+        return l
+
     def update(i, w, inp):
         u, x = inp
-
-        def loss_fn(w, u):
-            v = r2c(mimo(w, u)[None,:])
-            R2 = jnp.where(train(i),
-                           jnp.abs(x)**2,
-                           Rs[jnp.argmin(
-                               jnp.abs(Rs[:,None] * v / jnp.abs(v) - v),
-                               axis=0)]**2)
-            l = jnp.sum(jnp.abs(R2 - jnp.abs(v[0,:])**2))
-            return l
-
-        l, g = jax.value_and_grad(loss_fn)(w, u)
+        l, g = jax.value_and_grad(loss_fn)(w, u, x, i)
         out = (w, l)
         w = w - lr(i) * g.conj()
         return w, out
@@ -325,7 +333,7 @@ def rde(lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=T
 
 @partial(adaptive_filter, trainable=True)
 def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max=(30., 30.),
-          eps=1e-8, beta=0., const=comm.const("16QAM", norm=True), lockgain=False):
+          eps=1e-8, beta=0., const=comm.const("16QAM", norm=True)):
     '''
     Enhancements
     - add bias term to handle varying DC component
@@ -341,7 +349,6 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
     lr_s = cxopt.make_schedule(lr_s)
     lr_b = cxopt.make_schedule(lr_b)
     train = cxopt.make_schedule(train)
-    lockgain = cxopt.make_schedule(lockgain)
 
     def init(taps=31, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
         w0 = mimoinitializer(taps, dims, dtype, mimoinit)
@@ -354,22 +361,6 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
     def update(i, state, inp):
         w, f, s, b, fshat = state
         u, x = inp
-
-        # if lockgain: # for scalar lockgain only
-        #     w *= (jnp.abs(f) * jnp.abs(s))[:, None, None]
-        #     w /= (jnp.sqrt(jnp.sum(jnp.abs(w)**2, axis=(1, 2))))[:, None, None] + eps
-        #     f /= jnp.abs(f) + eps
-        #     s /= jnp.abs(s) + eps
-
-        w = jnp.where(lockgain(i),
-                      w / ((jnp.sqrt(jnp.sum(jnp.abs(w * (jnp.abs(f) * jnp.abs(s))[:, None, None])**2, axis=(1, 2))))[:, None, None] + eps),
-                      w)
-        f = jnp.where(lockgain(i),
-                      f / (jnp.abs(f) + eps),
-                      f)
-        s = jnp.where(lockgain(i),
-                      s / (jnp.abs(s) + eps),
-                      s)
 
         v = mimo(w, u)
         k = v * f
@@ -417,7 +408,7 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
 
 @partial(adaptive_filter, trainable=True)
 def frame_cpr_kf(Q=jnp.array([[0,    0],
-                              [0, 1e-9]]),
+                              [0, 1e-9]]), # 1e-8 is better if akf is False
                  R=jnp.array([[1e-2, 0],
                               [0, 1e-3]]),
                  const=comm.const("16QAM", norm=True),
