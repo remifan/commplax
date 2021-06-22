@@ -42,21 +42,21 @@ Commplax's is now under heavy development, any APIs might be changed constantly.
 
 ## Citing Commplax
 ```
-<pre>
 @software{commplax2021github,
-  author = {'<a href="mailto:remi.qr.fan@gmail.com" title="Remi Qirui FAN">Qirui Fan</a>' and '<a href="http://www.eie.polyu.edu.hk/~enluchao/" title="Chao Lu">Chao Lu</a>' and  '<a href="https://www.alanptlau.org/" title="Alan Pak Tao Lau">Alan Pak Tao Lau</a>'},
+  author = {Qirui Fan and Chao Lu and Alan Pak Tao Lau},
   title = {{Commplax}: differentiable {DSP} library for optical communication},
   url = {https://github.com/remifan/commplax},
   version = {0.1.0},
   year = {2021},
 }
-</pre>
 ```
 
 ## Reference documentation
 For details about the Commplax API, see the [reference documentation](https://commplax.readthedocs.io)
 
 ## Thanks to
-- [JAX](https://github.com/google/jax) community
-- [Flax](https://github.com/google/flax) community
+- [JAX](https://github.com/google/jax)
+- [Flax](https://github.com/google/flax)
+- [Chao Lu](http://www.eie.polyu.edu.hk/~enluchao/)
+- [Alan Pak Tao Lau](https://www.alanptlau.org/)
 
