@@ -1,6 +1,11 @@
 #
 nb_debug
-playground
+local
+
+# doc
+docs/_build
+docs/notebooks/.ipynb_checkpoints/
+docs/_autosummary
 
 # vim
 .vim
