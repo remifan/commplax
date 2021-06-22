@@ -57,6 +57,6 @@ For details about the Commplax API, see the [reference documentation](https://co
 ## Thanks to
 - [JAX](https://github.com/google/jax)
 - [Flax](https://github.com/google/flax)
-- [Chao Lu](http://www.eie.polyu.edu.hk/~enluchao/)
 - [Alan Pak Tao Lau](https://www.alanptlau.org/)
+- [Chao Lu](http://www.eie.polyu.edu.hk/~enluchao/)
 
