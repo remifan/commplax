@@ -13,11 +13,11 @@ setup(name='commplax',
         'scipy',
         'pandas',
         'seaborn',
-        'tqdm',
         'quantumrandom'
     ],
     extras_require={
         'dev': [
+            'tqdm',
             'attr',
             'mock',
             'pytest',
