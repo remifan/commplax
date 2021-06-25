@@ -1,4 +1,4 @@
-# Commplax: DSP in JAX
+# Commplax: differentiable DSP for optical communication
 Commplax is a modern Python DSP library mostly written in [JAX](https://github.com/google/jax), which is made by Google for high-performance machine learning research. Thanks to JAX's friendly API (most are [Numpy](https://numpy.org/)'s), efficient Autograd function and hardware acceleration, Commplax is/can:
 
 - deal with Complex number well, thanks to JAX's native Complex number support
@@ -17,7 +17,7 @@ Commplax is designed for researchers in (optical) communication community and ma
 The best way to get started with Commplax is through Jupyter's notebook demo, here are some examples
 - [Hello world](https://github.com/remifan/commplax/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/hello_world.ipynb)
 - (In progress) First glance of optimzation - optimize Digital Back Propogation (namely DNN-DBP or LDBP) while adapting DSP
-- (In progress) Play with DNN - integrate TRAX
+- (In progress) include DNN - integrate Flax
 
 ## Installation
 PyPI package will be available after first release
@@ -36,7 +36,7 @@ run following steps in Python virtual enviroment (e.g. conda, pipenv) is strongl
 ## Where to get help
 Commplax's is now under heavy development, any APIs might be changed constantly. It is encouraged to raise [Issue](https://github.com/remifan/commplax/issues) or join the [Dicussion panel](https://github.com/remifan/commplax/discussions)
 
-## Open dataset for benchmarks
+## Open datasets for benchmarks
 - [LabPtPTm1](https://github.com/remifan/LabPtPTm1)
 - [LabPtPTm2](https://github.com/remifan/LabPtPTm2)
 

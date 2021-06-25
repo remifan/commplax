@@ -34,7 +34,10 @@ def devputlike(x, y):
 
 
 def gpuexists():
-    gpus = jax.devices('gpu')
+    try:
+        gpus = jax.devices('gpu')
+    except RuntimeError:
+        return False
     return len(gpus) != 0
 
 

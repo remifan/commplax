@@ -4,12 +4,12 @@
 from setuptools import setup, find_packages
 
 setup(name='commplax',
-    version='1.0',
+    version='0.1.0',
     packages=find_packages(),
     install_requires=[
         'jax==0.2.13',
-        'jaxlib=0.1.66',
-        'flax=0.3.4',
+        'jaxlib==0.1.66',
+        'flax==0.3.4',
         'scipy',
         'pandas',
         'seaborn',
@@ -23,7 +23,6 @@ setup(name='commplax',
             'pytest',
             'parameterized',
             'h5py',
-            'jupyter',
             'ipykernel',
             'ipympl'
         ],
