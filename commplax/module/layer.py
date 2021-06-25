@@ -48,6 +48,10 @@ def vmap(layer, **vmap_kwargs):
     return partial(layer, layer_transform=partial(core.vmap, **vmap_kwargs))
 
 
+def scan(layer, **scan_kwargs):
+    return partial(layer, layer_transform=partial(core.scan, **scan_kwargs))
+
+
 BatchPowerNorm = make_layer(core.batchpowernorm, mutable=('norm',))
 Conv1d = make_layer(core.conv1d)
 MIMOConv1d = make_layer(core.mimoconv1d)

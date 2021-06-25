@@ -136,7 +136,7 @@ def conv1d_slicer(taps, rtap=None, stride=1, mode='valid'):
         yt = conv1d_t(xt, taps, rtap, stride, mode)
         D = xt.sps // yt.sps
         zt = SigTime(yt.start * D, yt.stop * D, xt.sps)
-        x = x[zt.start - xt.start: zt.stop - xt.stop]
+        x = x[zt.start - xt.start: x.shape[0] + zt.stop - xt.stop]
         return Signal(x, zt)
     return slicer
 
@@ -163,6 +163,12 @@ def vmap(f,
                    in_axes=in_axes, out_axes=out_axes)
     vf.__name__ = 'vmapped_' + f.__name__ # [Workaround]: lifted transformation does not keep the original name
     return vf
+
+
+def scan(f, in_axes=0, out_axes=0):
+    sf = lift.scan(f, in_axes=in_axes, out_axes=out_axes)
+    sf.__name__ = 'scanned' + f.__name__
+    return sf
 
 
 def simplefn(scope, signal, fn=None, aux_inputs=None):
