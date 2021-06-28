@@ -17,7 +17,7 @@ Commplax is designed for researchers in (optical) communication community and ma
 The best way to get started with Commplax is through Jupyter's notebook demo, here are some examples
 - [Hello world](https://github.com/remifan/commplax/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/hello_world.ipynb)
 - (In progress) First glance of optimzation - optimize Digital Back Propogation (namely DNN-DBP or LDBP) while adapting DSP
-- (In progress) include DNN - integrate Flax
+- (In progress) work with general DNN - integrate Flax
 
 ## Installation
 PyPI package is not available yet
@@ -25,17 +25,20 @@ PyPI package is not available yet
 it is recommended to install in Python virtual enviroment (e.g. conda, pipenv).
 
 ### Quick install
-commplax is tested on Python 3.8, jax-0.2.13, jaxlib-0.1.68
+Note jaxlib has no Windows builds yet, Windows 10+ users can use Commplax via [Windows Subsystem for Linux](https://docs.microsoft.com/en-us/windows/wsl/about).
+
+see [JAX](https://github.com/google/jax#installation) for more installation details.
+
+_commplax is tested on Python 3.8, jax-0.2.13, jaxlib-0.1.68_
 #### install CPU-only version
 ```
-pip install https://github.com/remifan/commplax/archive/master.zip
+pip install --upgrade https://github.com/remifan/commplax/archive/master.zip
 ```
 #### install CPU+GPU version
-if your CUDA version is 11.0
+you must install jaxlib that matches your cuda driver version, for example, if your CUDA version is 11.0,
 ```
 pip install --upgrade jax=0.2.13 jaxlib==0.1.66+cuda110 -f https://storage.googleapis.com/jax-releases/jax_releases.html
 ```
-you must install jaxlib matching your cuda driver version, see [JAX](https://github.com/google/jax#installation) for more installation details
 
 after jaxlib+cuda is installed,
 ```
@@ -43,7 +46,7 @@ pip install --upgrade https://github.com/remifan/commplax/archive/master.zip
 ```
 
 #### install TPU version
-Since Cloud TPU VM jaxlib is available, it is possible to run commplax in TPU. Will benchmark this backend soon.
+Cloud TPU VM jaxlib seems available, it is possible to run commplax in TPU. Will study TPU backend soon.
 
 ### Development
 - follow [JAX](https://github.com/google/jax)'s guide to install JAX-CPU/GPU
@@ -69,7 +72,7 @@ Commplax's is now under heavy development, any APIs might be changed constantly.
 ```
 
 ## Reference documentation
-For details about the Commplax API, see the [reference documentation](https://commplax.readthedocs.io)
+For details about the Commplax API, see the [reference documentation](https://commplax.readthedocs.io) (work in progess)
 
 ## Acknowledgement
 - [JAX](https://github.com/google/jax)
