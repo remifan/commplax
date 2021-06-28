@@ -116,6 +116,7 @@ def update_aux(var, tar):
 
 
 def conv1d_t(t, taps, rtap, stride, mode):
+    assert t.sps >= stride, f'sps of input SigTime must be >= stride: {stride}, got {t.sps} instead'
     if rtap is None:
         rtap = (taps - 1) // 2
     delay = -(-(rtap + 1) // stride) - 1
