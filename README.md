@@ -20,16 +20,33 @@ The best way to get started with Commplax is through Jupyter's notebook demo, he
 - (In progress) include DNN - integrate Flax
 
 ## Installation
-PyPI package will be available after first release
+PyPI package is not available yet
 
-run following steps in Python virtual enviroment (e.g. conda, pipenv) is strongly recommended
+it is recommended to install in Python virtual enviroment (e.g. conda, pipenv).
 
-### Try commplax
-- follow [JAX](https://github.com/google/jax)'s guide to install JAX
-- `pip install https://github.com/remifan/commplax/archive/master.zip`
+### Quick install
+commplax is tested on Python 3.8, jax-0.2.13, jaxlib-0.1.68
+#### install CPU-only version
+```
+pip install https://github.com/remifan/commplax/archive/master.zip
+```
+#### install CPU+GPU version
+if your CUDA version is 11.0
+```
+pip install --upgrade jax=0.2.13 jaxlib==0.1.66+cuda110 -f https://storage.googleapis.com/jax-releases/jax_releases.html
+```
+you must install jaxlib matching your cuda driver version, see [JAX](https://github.com/google/jax#installation) for more installation details
 
-### Install for development
-- follow [JAX](https://github.com/google/jax)'s guide to install JAX
+after jaxlib+cuda is installed,
+```
+pip install --upgrade https://github.com/remifan/commplax/archive/master.zip
+```
+
+#### install TPU version
+Since Cloud TPU VM jaxlib is available, it is possible to run commplax in TPU. Will benchmark this backend soon.
+
+### Development
+- follow [JAX](https://github.com/google/jax)'s guide to install JAX-CPU/GPU
 - `git clone https://github.com/remifan/commplax && cd commplax`
   `pip install -e '.'`
 
@@ -46,7 +63,7 @@ Commplax's is now under heavy development, any APIs might be changed constantly.
   author = {Qirui Fan and Chao Lu and Alan Pak Tao Lau},
   title = {{Commplax}: differentiable {DSP} library for optical communication},
   url = {https://github.com/remifan/commplax},
-  version = {0.1.0},
+  version = {0.1.1},
   year = {2021},
 }
 ```
@@ -54,7 +71,7 @@ Commplax's is now under heavy development, any APIs might be changed constantly.
 ## Reference documentation
 For details about the Commplax API, see the [reference documentation](https://commplax.readthedocs.io)
 
-## Thanks to
+## Acknowledgement
 - [JAX](https://github.com/google/jax)
 - [Flax](https://github.com/google/flax)
 - [Alan Pak Tao Lau](https://www.alanptlau.org/)
