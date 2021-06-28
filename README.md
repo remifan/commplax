@@ -37,7 +37,7 @@ pip install --upgrade https://github.com/remifan/commplax/archive/master.zip
 #### install CPU+GPU version
 you must install jaxlib that matches your cuda driver version, for example, if your CUDA version is 11.0,
 ```
-pip install --upgrade jax=0.2.13 jaxlib==0.1.66+cuda110 -f https://storage.googleapis.com/jax-releases/jax_releases.html
+pip install --upgrade jax==0.2.13 jaxlib==0.1.66+cuda110 -f https://storage.googleapis.com/jax-releases/jax_releases.html
 ```
 
 after jaxlib+cuda is installed,
