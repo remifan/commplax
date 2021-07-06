@@ -19,8 +19,8 @@ Commplax is designed for researchers in (optical) communication community and ma
 
 ## Quickstart
 The best way to get started with Commplax is through Jupyter's notebook demo, here are some examples
-- [Hello world](https://github.com/remifan/commplax/blob/master/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/hello_world.ipynb)
-- (In progress) First glance of optimzation - optimize Digital Back Propogation (namely DNN-DBP or LDBP) while adapting DSP
+- [Hello world: demodulation](https://github.com/remifan/commplax/blob/master/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/hello_world.ipynb)
+- [optimze stateful layers](https://github.com/remifan/commplax/blob/master/examples/stateful_layer.ipynb) - train Digital Back Propogation (namely DNN-DBP or LDBP) with adaptive filter layers. [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/stateful_layer.ipynb)
 - (In progress) work with general DNN - integrate Flax
 
 ## Installation
