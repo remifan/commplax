@@ -15,7 +15,7 @@ Commplax is designed for researchers in (optical) communication community and ma
 
 ## Quickstart
 The best way to get started with Commplax is through Jupyter's notebook demo, here are some examples
-- [Hello world](https://github.com/remifan/commplax/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/hello_world.ipynb)
+- [Hello world](https://github.com/remifan/commplax/blob/master/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/hello_world.ipynb)
 - (In progress) First glance of optimzation - optimize Digital Back Propogation (namely DNN-DBP or LDBP) while adapting DSP
 - (In progress) work with general DNN - integrate Flax
 
