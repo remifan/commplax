@@ -14,7 +14,7 @@
 
 
 import numpy as np
-from jax import jit, device_put, numpy as jnp, lax
+from jax import jit, device_put, numpy as jnp
 from commplax import xop, comm, xcomm, util, adaptive_filter as af
 
 
@@ -42,11 +42,12 @@ def cdctaps(sr, CD, fc=193.4e12):
     return mintaps
 
 
-def cdcomp(signal, sr, CD, fc=193.4e12, polmux=True, mode='SAME', backend=None):
+def cdcomp(signal, sr, CD, fc=193.4e12, taps=None, polmux=True, mode='SAME', backend=None):
     D = 16.5E-6
     dist = CD / D
-    mintaps = cdctaps(sr, CD, fc)
-    return tddbp(signal, sr, 0., dist, 1, mintaps, xi=0., D=D, polmux=polmux, mode=mode, backend=backend)
+    if taps is None:
+        taps = cdctaps(sr, CD, fc)
+    return tddbp(signal, sr, 0., dist, 1, taps, xi=0., D=D, polmux=polmux, mode=mode, backend=backend)
 
 
 def modulusmimo(signal, sps=2, taps=32, lr=2**-14, cma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
@@ -105,12 +106,11 @@ def lmsmimo(signal, truth, sps=2, taps=31,
 def _lmsmimo(signal, truth, sps, taps, mu_w, mu_f, mu_s, mu_b, beta):
     y = jnp.asarray(signal)
     x = jnp.asarray(truth)
-    lms_init, lms_update, lms_map = af.ddlms(mu_w=mu_w,
-                                             mu_f=mu_f,
-                                             mu_s=mu_s,
-                                             mu_b=mu_b,
-                                             beta=beta,
-                                             lockgain=False)
+    lms_init, lms_update, lms_map = af.ddlms(lr_w=mu_w,
+                                             lr_f=mu_f,
+                                             lr_s=mu_s,
+                                             lr_b=mu_b,
+                                             beta=beta)
     yf = af.frame(y, taps, sps)
     s0 = lms_init(taps, mimoinit='centralspike')
     _, (ss, (loss, *_)) = af.iterate(lms_update, 0, s0, yf, x)[1]
@@ -129,8 +129,7 @@ def rdemimo(signal, truth, lr=1/2**13, sps=2, taps=31, backend='cpu',
 def _rdemimo(signal, truth, lr, Rs, sps, taps):
     y = jnp.asarray(signal)
     x = jnp.asarray(truth)
-    dims = y.shape[-1]
-    rde_init, rde_update, rde_map = af.rde(lr=lr, Rs=Rs, dims=dims)
+    rde_init, rde_update, rde_map = af.rde(lr=lr, Rs=Rs)
     yf = af.frame(y, taps, sps)
     s0 = rde_init(taps=taps, dtype=y.dtype)
     _, (ss, loss) = af.iterate(rde_update, 0, s0, yf, x)[1]
