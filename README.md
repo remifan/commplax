@@ -1,6 +1,5 @@
 # Commplax: differentiable DSP for optical communication
 [Documentation](https://commplax.readthedocs.io) |
-[Chat](https://gitter.im/commplax/community)
 
 
 Commplax is a modern Python DSP library mostly written in [JAX](https://github.com/google/jax), which is made by Google for high-performance machine learning research. Thanks to JAX's friendly API (most are [Numpy](https://numpy.org/)'s), efficient Autograd function and hardware acceleration, Commplax is/can:
@@ -59,8 +58,7 @@ Cloud TPU VM jaxlib seems available, it is possible to run commplax in TPU. Will
 
 ## Where to get help
 Commplax's is now under heavy development, any APIs might be changed constantly. It is encouraged to
-- raise [Issue](https://github.com/remifan/commplax/issues)
-- [Chat](https://gitter.im/commplax/community)
+- [Issue](https://github.com/remifan/commplax/issues)
 - [Dicussion panel](https://github.com/remifan/commplax/discussions)
 
 ## Open datasets for benchmarks
