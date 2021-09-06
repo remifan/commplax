@@ -1,4 +1,5 @@
 sphinx >=4
 myst-nb
+ipykernel
 
 .  # install commplax from the current directory
