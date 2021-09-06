@@ -4,4 +4,4 @@ jupyter-sphinx
 myst-nb
 ipykernel
 
-.  # install commplax from the current directory
+.[fs]  # install commplax from the current directory

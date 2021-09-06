@@ -33,7 +33,6 @@ setup(name='commplax',
         'jaxlib==0.1.66',
         'flax==0.3.4',
         'seaborn',
-        'zarr',
         'quantumrandom'
     ],
     extras_require={
@@ -43,10 +42,14 @@ setup(name='commplax',
             'mock',
             'pytest',
             'parameterized',
-            'h5py',
             'ipykernel',
             'ipympl'
         ],
+        'fs': [
+            'zarr',
+            's3fs',
+            'fsspec'
+        ]
     },
     license='Apache-2.0',
 )
