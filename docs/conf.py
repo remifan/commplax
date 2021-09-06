@@ -104,5 +104,5 @@ execution_allow_errors = False
 execution_fail_on_error = True  # Requires https://github.com/executablebooks/MyST-NB/pull/296
 
 # Notebook cell execution timeout; defaults to 30.
-execution_timeout = 100
+execution_timeout = 300
 
