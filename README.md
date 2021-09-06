@@ -1,4 +1,6 @@
 # Commplax: differentiable DSP for optical communication
+[![Documentation Status](https://readthedocs.org/projects/commplax/badge/?version=latest)](https://commplax.readthedocs.io/en/latest/?badge=latest)
+
 [Documentation](https://commplax.readthedocs.io) |
 
 
