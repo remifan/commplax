@@ -33,12 +33,14 @@ def _tddbp(x, sr, lp, dist, spans, taps, xi, D, polmux, mode):
                                 mode=mode)
 
 
-def cdctaps(sr, CD, fc=193.4e12):
+def cdctaps(sr, CD, fc=193.4e12, odd_taps=True):
     pi = np.pi
     C = 299792458. # speed of light [m/s]
     lambda_ = C / fc
     # estimate minimal required number of taps for single step TDDBP
     mintaps = int(np.ceil(2 * pi * CD * lambda_**2 / (2 * pi * C) * sr**2))
+    if odd_taps and mintaps % 2 == 0:
+        mintaps += 1
     return mintaps
 
 

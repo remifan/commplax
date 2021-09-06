@@ -10,6 +10,11 @@ docs/_autosummary
 # vim
 .vim
 
+# mac
+.DS_Store
+# Thumbnails
+._*
+
 #
 # Byte-compiled / optimized / DLL files
 __pycache__/

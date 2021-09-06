@@ -59,7 +59,7 @@ class Optimizer(NamedTuple):
   update_fn: UpdateFn
   params_fn: ParamsFn
 
-Schedule = Callable[[Step], float]
+Schedule = Callable[[Any], float]
 
 def optimizer(opt_maker: Callable[...,
   Tuple[Callable[[Params], State],
@@ -355,7 +355,7 @@ def piecewise_constant(boundaries: Any, values: Any):
     return values[jnp.sum(i > boundaries)]
   return schedule
 
-def make_schedule(scalar_or_schedule: Union[float, Schedule]) -> Schedule:
+def make_schedule(scalar_or_schedule: Union[float, bool, Schedule]) -> Schedule:
   if callable(scalar_or_schedule):
     return scalar_or_schedule
   elif jnp.ndim(scalar_or_schedule) == 0:

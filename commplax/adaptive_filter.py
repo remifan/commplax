@@ -16,11 +16,12 @@
 import jax
 import functools
 import numpy as np
-from typing import Any, Callable, NamedTuple, Tuple, Union
+from typing import Any, Callable, NamedTuple, Optional, Tuple, Union
 from functools import partial
 from jax import numpy as jnp
 from commplax import comm, xcomm, xop, cxopt
 from jax.tree_util import tree_flatten, tree_unflatten
+from commplax.cxopt import Schedule
 
 Array = Any
 Params = Any
@@ -201,15 +202,32 @@ def mimoinitializer(taps, dims, dtype, initkind):
 
 
 @adaptive_filter
-def cma(lr=1e-4, R2=1.32, const=None):
-    '''
-    CMA blind MIMO equalizer
+def cma(
+    lr: Union[float, Schedule] = 1e-4,
+    R2: Optional[float]=1.32,
+    const: Optional[Array]=None
+) -> AdaptiveFilter:
+    """CMA blind MIMO adaptive filter.
+
+    Args:
+      lr: Optional; learning rate
+      R2: Optional; reference square of radius
+      const: Optional; constellation used to infer R2 when R2 is None
+
+    Returns:
+      an ``AdaptiveFilter`` object
+
+    Examples:
+      >>> from commplax.adaptive_filter import cma
+      >>>
+      >>> af = cma(lr=1e-4, R2=1.32) # for non-PS power normalized 16QAM signal
+
     References:
-    [1] D. Godard, “Self-recovering equalization and carrier tracking in two-dimensional data
+      - [1] D. Godard, “Self-recovering equalization and carrier tracking in two-dimensional data
         communication systems,” IEEE Trans. Commun., vol. 28, no. 11, pp. 1867–1875, Nov. 1980.
-    [2] K. Kikuchi, “Polarization-demultiplexing algorithm in the digital coherent receiver,”
+      - [2] K. Kikuchi, “Polarization-demultiplexing algorithm in the digital coherent receiver,”
         in Proc. Digest 2008 IEEE/LEOS Summer Topical Meetings, Jul., pp. 101–102.
-    '''
+    """
     lr = cxopt.make_schedule(lr)
 
     if const is not None:
@@ -240,16 +258,34 @@ def cma(lr=1e-4, R2=1.32, const=None):
 
 
 @adaptive_filter
-def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
-    '''
-    singularity-free blind MIMO equalizer
+def mucma(
+    dims: int = 2,
+    lr: Union[float, Schedule] = 1e-4,
+    R2: Union[float, Schedule] = 1.32,
+    delta: int = 6,
+    beta: float = 0.999,
+    const: Optional[Array] = None
+) -> AdaptiveFilter:
+    """Multiuser CMA - Singularity-free blind MIMO equalizer
+    
+    Args:
+      dims: dimension of input signal
+      lr: learning rate
+      R2: reference squared radius
+      delta: the number of symbols used in evaluating the cross-correlation
+      beta: smoothing factor of exponential moving everage
+      const: Optional; constellation used to infer R2 when R2 is None
+      
+    Returns:
+      an ``AdaptiveFilter`` object
+
     References:
-    [1] Papadias, Constantinos B., and Arogyaswami J. Paulraj. "A constant modulus algorithm
-    for multiuser signal separation in presence of delay spread using antenna arrays."
-    IEEE signal processing letters 4.6 (1997): 178-181.
-    [2] Vgenis, Athanasios, et al. "Nonsingular constant modulus equalizer for PDM-QPSK coherent
-    optical receivers." IEEE Photonics Technology Letters 22.1 (2009): 45-47.
-    '''
+      - [1] Papadias, Constantinos B., and Arogyaswami J. Paulraj. "A constant modulus algorithm
+        for multiuser signal separation in presence of delay spread using antenna arrays."
+        IEEE signal processing letters 4.6 (1997): 178-181.
+      - [2] Vgenis, Athanasios, et al. "Nonsingular constant modulus equalizer for PDM-QPSK coherent
+        optical receivers." IEEE Photonics Technology Letters 22.1 (2009): 45-47.
+    """
     lr = cxopt.make_schedule(lr)
 
     if const is not None:
@@ -303,13 +339,29 @@ def mucma(dims=2, lr=1e-4, R2=1.32, delta=6, beta=0.999, const=None):
 
 
 @partial(adaptive_filter, trainable=True)
-def rde(lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=True))), const=None):
-    '''
+def rde(
+    lr: Union[float, Schedule] = 2**-15,
+    train: Union[bool, Schedule] = False,
+    Rs: Array = jnp.unique(jnp.abs(comm.const("16QAM", norm=True))),
+    const: Optional[Array] = None
+) -> AdaptiveFilter:
+    """Radius Directed adaptive Equalizer
+
+    Args:
+      lr: learning rate. scalar or Schedule
+      train: schedule training mode, which can be a bool for global control within one call
+        or an array of bool to swich training on iteration basis
+      Rs: the radii of the target constellation
+      const: Optional; constellation used to infer R2 when R2 is None
+
+    Returns:
+      an ``AdaptiveFilter`` object
+
     References:
-    [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
+      - [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
         carrier phase recovery in a 16-QAM optical coherent system. Journal
         of lightwave technology, 27(15), pp.3042-3049.
-    '''
+    """
     lr = cxopt.make_schedule(lr)
     train = cxopt.make_schedule(train)
 
@@ -347,17 +399,43 @@ def rde(lr=2**-15, train=False, Rs=jnp.unique(jnp.abs(comm.const("16QAM", norm=T
 
 
 @partial(adaptive_filter, trainable=True)
-def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max=(30., 30.),
-          eps=1e-8, beta=0., const=comm.const("16QAM", norm=True)):
-    '''
-    Enhancements
-    - add bias term to handle varying DC component
+def ddlms(
+    lr_w: Union[float, Schedule] = 1/2**6,
+    lr_f: Union[float, Schedule] = 1/2**7,
+    lr_s: Union[float, Schedule] = 0.,
+    lr_b: Union[float, Schedule] = 1/2**11,
+    train: Union[bool, Schedule] = False,
+    grad_max: Tuple[float, float] = (30., 30.),
+    eps: float = 1e-8,
+    beta: float = 0.,
+    const: Array = comm.const("16QAM", norm=True)
+) -> AdaptiveFilter:
+    """Decision-Directed Least Mean Square adaptive equalizer
+
+    Args:
+      lr_w: learning rate of MIMO(butterfly part)'s weights
+      lr_f: learning rate of stage-I phase tracker
+      lr_s: learning rate of stage-II phase tracker
+      lr_b: learning rate of bias term
+      train: controlling flag of training mode, which can be a bool for global control within one call
+        or an array of bool to swich training on iteration basis
+      grad_max: clipling threshold of the gradients of phase trackers
+      eps: perturbative term to stablize normalized LMS
+      beta: smoothening factor of phase trackers
+      const: Optional; constellation used to infer R2 when R2 is None
+
+    Returns:
+      an ``AdaptiveFilter`` object
+
+    Notes:
+      - add bias term to handle varying DC component
+
     References:
-    [1] Mori, Y., Zhang, C. and Kikuchi, K., 2012. Novel configuration of
+      - [1] Mori, Y., Zhang, C. and Kikuchi, K., 2012. Novel configuration of
         finite-impulse-response filters tolerant to carrier-phase fluctuations
         in digital coherent optical receivers for higher-order quadrature
         amplitude modulation signals. Optics express, 20(24), pp.26236-26251.
-    '''
+    """
     const = jnp.asarray(const)
     lr_w = cxopt.make_schedule(lr_w)
     lr_f = cxopt.make_schedule(lr_f)
@@ -422,25 +500,40 @@ def ddlms(lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**11, train=False, grad_max
 
 
 @partial(adaptive_filter, trainable=True)
-def frame_cpr_kf(Q=jnp.array([[0,    0],
-                              [0, 1e-9]]), # 1e-8 is better if akf is False
-                 R=jnp.array([[1e-2, 0],
-                              [0, 1e-3]]),
-                 const=comm.const("16QAM", norm=True),
-                 train=False,
-                 akf=cxopt.piecewise_constant([10, 500], [False, True, False]),
-                 alpha=0.999):
-    '''
+def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
+                                       [0, 1e-9]]), # 1e-8 is better if akf is False
+                 R: Array = jnp.array([[1e-2, 0],
+                                       [0, 1e-3]]),
+                 const: Array = comm.const("16QAM", norm=True),
+                 train: Union[bool, Schedule] = False,
+                 akf: Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
+                 alpha: float = 0.999) -> AdaptiveFilter:
+    """Block based estimator of carrier frequency offset
+
     frame-by-frame coarse carrier phsae recovery using Kalman filter, can tolerate 0.1 * baudrate
     frequency offset[1].
-    Attention: needs proper initialization of FO[1]
+    
+    Args:
+        Q: covariance matrix of observer noises
+        R: covariance matrix of system noises
+        const: reference constellation used in decison stage
+        train: scheduler of training mode
+        akf: scheduler of AKF
+        alpha: smoothening factor used in AKF
+    
+    Returns:
+        A ``AdaptiveFilter`` object
+    
+    Caution:
+        needs proper initialization of FO[1]
+    
     References:
-    [1] Inoue, Takashi, and Shu Namiki. "Carrier recovery for M-QAM signals based on
-        a block estimation process with Kalman filter." Optics express 22.13 (2014): 15376-15387.
-    [2] Akhlaghi, Shahrokh, Ning Zhou, and Zhenyu Huang. "Adaptive adjustment of noise
-        covariance in Kalman filter for dynamic state estimation." 2017 IEEE power & energy
-        society general meeting. IEEE, 2017.
-    '''
+        - [1] Inoue, Takashi, and Shu Namiki. "Carrier recovery for M-QAM signals based on
+          a block estimation process with Kalman filter." Optics express 22.13 (2014): 15376-15387.
+        - [2] Akhlaghi, Shahrokh, Ning Zhou, and Zhenyu Huang. "Adaptive adjustment of noise
+          covariance in Kalman filter for dynamic state estimation." 2017 IEEE power & energy
+          society general meeting. IEEE, 2017.
+    """
     const = jnp.asarray(const)
     train = cxopt.make_schedule(train)
     akf = cxopt.make_schedule(akf)
@@ -491,22 +584,35 @@ def frame_cpr_kf(Q=jnp.array([[0,    0],
 
 
 @partial(adaptive_filter, trainable=True)
-def cpane_ekf(train=False,
-              alpha=0.99,
-              beta=0.6,
-              Q=1e-4 + 0j,
-              R=1e-2 + 0j,
-              akf=True,
-              const=comm.const("16QAM", norm=True)):
-    '''
+def cpane_ekf(train: Union[bool, Schedule] = False,
+              alpha: float = 0.99,
+              beta: float = 0.6,
+              Q: complex = 1e-4 + 0j,
+              R: complex =1e-2 + 0j,
+              akf: bool = True,
+              const: Array = comm.const("16QAM", norm=True)) -> AdaptiveFilter:
+    """Carrier Phase and Amplitude Noise Estimator
     symbol-by-symbol fine carrier phsae recovery using extended Kalman filter
+
+    Args:
+      train: scheduler for training mode
+      alpha: smoothening factor
+      beta: smoothening factor
+      Q: covariance matrix of observer noises
+      R: covariance matrix of system noises
+      akf: adaptive controlling of Q and R, a.k.a, AKF
+      const: reference constellation
+
+    Returns:
+      a ``AdaptiveFilter`` object
+
     References:
-    [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
+      - [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
         of phase and amplitude noise in coherent QAM systems. Optics express, 24(6), pp.6391-6401.
-    [2] Akhlaghi, Shahrokh, Ning Zhou, and Zhenyu Huang. "Adaptive adjustment of noise
+      - [2] Akhlaghi, Shahrokh, Ning Zhou, and Zhenyu Huang. "Adaptive adjustment of noise
         covariance in Kalman filter for dynamic state estimation." 2017 IEEE power & energy
         society general meeting. IEEE, 2017.
-    '''
+    """
     const = jnp.asarray(const)
     train = cxopt.make_schedule(train)
 
@@ -550,15 +656,30 @@ def cpane_ekf(train=False,
 
 
 @adaptive_filter
-def anf(f0, sr, A=1, phi=0, lr=1e-4):
-    '''
+def anf(f0: float,
+        sr: float,
+        A: float = 1,
+        phi: float = 0,
+        lr: float = 1e-4) -> AdaptiveFilter:
+    """ Adaptive Notch Filter for noise cancelling
+
+    Args:
+        f0: target frequency
+        sr: sampling rate
+        A: amplitude
+        phi: phase
+        lr: learning rate
+    
+    Returns:
+        a ``AdaptiveFilter`` object
+
     References:
-    [1] Widrow, Bernard, et al. "Adaptive noise cancelling: Principles and applications."
-        Proceedings of the IEEE 63.12 (1975): 1692-1716.
-    [2] Li, Fan, et al. "100 Gbit/s PAM4 signal transmission and reception for 2-km
-        interconnect with adaptive notch filter for narrowband interference." Optics express
-        26.18 (2018): 24066-24074.
-    '''
+        - [1] Widrow, Bernard, et al. "Adaptive noise cancelling: Principles and applications."
+          Proceedings of the IEEE 63.12 (1975): 1692-1716.
+        - [2] Li, Fan, et al. "100 Gbit/s PAM4 signal transmission and reception for 2-km
+          interconnect with adaptive notch filter for narrowband interference." Optics express
+          26.18 (2018): 24066-24074.
+    """
     lr = cxopt.make_schedule(lr)
     T = 1 / sr
     w0 = 2 * np.pi * f0

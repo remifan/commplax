@@ -33,6 +33,7 @@ setup(name='commplax',
         'jaxlib==0.1.66',
         'flax==0.3.4',
         'seaborn',
+        'zarr',
         'quantumrandom'
     ],
     extras_require={
