@@ -1,0 +1,4 @@
+sphinx >=4
+myst-nb
+
+.  # install commplax from the current directory
