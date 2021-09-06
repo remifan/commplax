@@ -4,12 +4,20 @@
    contain the root `toctree` directive.
 
 Commplax's reference documentation
-====================================
+==================================
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+   :maxdepth: 1
+   :caption: Getting Started
 
+   notebooks/quickstart
+
+
+.. toctree::
+   :maxdepth: 3
+   :caption: API documentation
+
+   commplax
 
 
 Indices and tables

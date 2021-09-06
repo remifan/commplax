@@ -38,26 +38,37 @@ def glance(x):
         waveform(x[:,ch], axes=[asp(gs[1, ch]), asp(gs[2, ch])])
 
 
-def scatter(signal, title="Constellation", ax=None, density=False):
-    if np.iscomplex(signal).any():
-        I = np.real(signal)
-        Q = np.imag(signal)
-    else:
-        I = signal[0]
-        Q = signal[1]
+def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None, dpi=100):
+    signal = np.atleast_1d(signal)
+    if not np.iscomplex(signal).any():
+        raise ValueError(f'expect complex input, got {signal.dtype} instead')
+      
+    if signal.ndim == 1:
+      signal = signal[:, None]
+      
+    dims = signal.shape[1]
+    
+    fig, axes = plt.subplots(1, dims, dpi=dpi, sharex=True, sharey=True)
+    
+    if dims == 1:
+        axes = [axes]
+    
+    for i in range(dims):
+        ax = axes[i]
+        x = signal[:, i]
+      
+        I = np.real(x)
+        Q = np.imag(x)
 
-    if ax is None:
-        fig, ax = plt.subplots()
-        fig.set_figwidth(3)
-        fig.set_figheight(3)
-        fig.set_dpi(100)
-    #plt.figure(num=None, figsize=(8, 6), dpi=100)
-    if density:
-        ax = sns.kdeplot(x=I, y=Q, fill=True, ax=ax)
-    else:
-        ax.scatter(I, Q, s=1)
-    ax.axis('equal')
-    ax.set_title(title)
+        if kde:
+            ax = sns.kdeplot(x=I, y=Q, ax=ax, **kdeopts)
+        else:
+            ax.scatter(I, Q, s=1)
+
+        ax.set_aspect('equal')
+
+        if dims > 1:
+            ax.set_title(f'dim{i}') if title is None else ax.set_title(title[i])
 
 
 def pwelch(x, ax=None):
@@ -78,7 +89,8 @@ def waveform(x, axes=None):
     axes[1].plot([x.imag.mean().tolist(),] * len(x))
 
 
-def desc_filter(w, H, ax=None, colors=None, legend=None, Hermitian=False, phase=True):
+def desc_filter(w, H, ax=None, colors=None, legend=None, Hermitian=False, phase=True,
+                legend_fontsize=9):
     if ax is None:
         fig = plt.figure()
         ax1 = plt.gca()
@@ -110,7 +122,8 @@ def desc_filter(w, H, ax=None, colors=None, legend=None, Hermitian=False, phase=
                 ax2 = ax1.twinx()
             ax2.plot(w, np.unwrap(np.angle(H_)), '--', color=colors[i], alpha=0.4)
             ax2.set_ylabel('phase (rad)')
-    ax1.legend(lgd, loc='best')
+    if len(H) > 1:
+        ax1.legend(lgd, loc='best', fontsize=legend_fontsize)
 
 
 def lpvssnr(LP, S, label=None, ax=None, show_std=True, show_ex=True):
