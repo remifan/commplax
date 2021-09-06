@@ -27,7 +27,6 @@ extensions = [
     'sphinx.ext.mathjax',
     'sphinx.ext.napoleon',
     'sphinx.ext.viewcode',
-    'sphinx_panels',
     'matplotlib.sphinxext.plot_directive',
     'myst_nb',
 ]
