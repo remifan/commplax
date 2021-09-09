@@ -10,7 +10,7 @@ Commplax's reference documentation
    :maxdepth: 1
    :caption: Getting Started
 
-   notebooks/quickstart
+   notebooks/overview.ipynb
 
 
 .. toctree::
