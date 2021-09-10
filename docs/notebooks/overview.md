@@ -41,7 +41,7 @@ Commplax is a open-sourced research project launched in Spring 2021 and has sinc
 ## What does the workflow of commplax look like
 ```{thebe-button} Click Here First to Activate Interaction!
 ```
-Then click "run" button of each codeblock shown below in order to try out this tiny example
+After it turns ready, click "run" button of each codeblock shown below in order to try out this tiny example
 
 ### Install commplax and example dataAPI
 
