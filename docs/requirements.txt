@@ -3,5 +3,6 @@ sphinx_rtd_theme
 jupyter-sphinx
 myst-nb
 ipykernel
+sphinx-thebe
 
 .[fs]  # install commplax from the current directory

@@ -29,6 +29,7 @@ extensions = [
     'sphinx.ext.viewcode',
     'matplotlib.sphinxext.plot_directive',
     'myst_nb',
+    'sphinx_thebe',
 ]
 
 # Experimental feature to preserve the default argument values of
