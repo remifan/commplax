@@ -41,7 +41,7 @@ Commplax is a open-sourced research project launched in Spring 2021 and has sinc
 ## What does the workflow of commplax look like
 ```{thebe-button} Click Here First to Activate Interaction!
 ```
-After it turns ready, click "run" button of each codeblock shown below in order to try out this tiny example
+The activation process may take a while. After the clicked button turns **ready**, click the "run" button of the codeblock below, which may take several seconds to install the dependencies. Variables and their status are shared across codeblocks, once the last run gets finished you can move to the next codeblock and repeat this 'run-wait-result' loop. 
 
 ### Install commplax and example dataAPI
 
@@ -97,7 +97,7 @@ z = eq.ekfcpr(z)[0] # finer carrier phase recovery
 cplt.scatter(z[40000:45000])
 ```
 
-These handy interactions are enabled by [Jupyter Notebook](https://jupyter.org/), which you will be most likely to live with through the whole learning path.
+This handy interaction is a minimal example of [Jupyter Notebook](https://jupyter.org/), which you will be most likely to live with through the whole learning path.
 
 See [Equalizers](https://commplax.readthedocs.io/en/latest/tutorial/equalizers.html) for full version of the above example.
 
