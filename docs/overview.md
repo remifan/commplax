@@ -43,6 +43,8 @@ Commplax is a open-sourced research project launched in Spring 2021 and has sinc
 ```
 The activation process may take a while. After the clicked button turns <span style="color:green">**ready**</span>, click the "run" button of the codeblock below, which may take several seconds to install the dependencies. Variables and their status are shared across codeblocks, once the current run gets finished you can move to the next codeblock and repeat this 'run-wait-result' loop. 
 
+The following installation and code execution would be running in the cloud via mybinder.org.
+
 ### Install commplax and example dataAPI
 
 

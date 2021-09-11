@@ -1,11 +1,11 @@
 # Installation
 
-We assume you have seen command-line operations, since the following steps are command-line based.
+We assume you have seen command-line operations, the following steps are command-line based.
 
 ```{admonition} Windows
 commplax is built on top of Jax, which does not support Windows at this moment, so neither does commplax. If you are Windows 10+ user, you may try [Windows Subsystem for Linux](https://docs.microsoft.com/en-us/windows/wsl/about), which is an efficient GNU/Linux compatible environment made by Microsoft.
 
-After you have WSL and WSL/Linux (e.g., Ubuntu) installed, lauching the linux OS should bring you a terminal prompt, and that's where we starts.
+After you have WSL and WSL/Linux (e.g., Ubuntu) installed, lauching the linux OS should bring you a terminal prompt, and that's where we start.
 ```
 
 If you are familar with Python virtual enviroment (conda, pipenv...), you may skip to [Install Jax and Commplax](#install-jax-and-commplax).
@@ -13,7 +13,7 @@ If you are familar with Python virtual enviroment (conda, pipenv...), you may sk
 
 ## Python Virtual Environment (venv)
 
-### why venv?
+### Why venv?
 Like most programming language, a Python program is essentially the composition of some user scripts and their dependences (packages) installed through package manager (`pip`).
 
 For example, one is programming a GPU pricing prediction software which relies on package (`scipy`) having linear regression function that itself depends on matrix manipulation package (`numpy`), and it is nice to install a visualizaition package(`matplotlib`) which also depends on `numpy`. The entire dependences have a directed acyclic graph (DAG) structure, meaning that multiple packages might require the same package.
