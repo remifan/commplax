@@ -41,9 +41,10 @@ Commplax is a open-sourced research project launched in Spring 2021 and has sinc
 ## What does the workflow of commplax look like
 ```{thebe-button} Click Here First to Activate Interaction!
 ```
-The activation process may take a while. After the clicked button turns **ready**, click the "run" button of the codeblock below, which may take several seconds to install the dependencies. Variables and their status are shared across codeblocks, once the last run gets finished you can move to the next codeblock and repeat this 'run-wait-result' loop. 
+The activation process may take a while. After the clicked button turns <span style="color:green">**ready**</span>, click the "run" button of the codeblock below, which may take several seconds to install the dependencies. Variables and their status are shared across codeblocks, once the current run gets finished you can move to the next codeblock and repeat this 'run-wait-result' loop. 
 
 ### Install commplax and example dataAPI
+
 
 ```{code-block}
 :class: thebe
@@ -52,19 +53,18 @@ print('installing...')
 %pip install --upgrade --quiet https://github.com/remifan/commplax/archive/master.zip
 %pip install --upgrade --quiet https://github.com/remifan/LabPtPTm1/archive/master.zip
 print('done.')
+```
+
+### Work the example
+```{code-block}
+:class: thebe
 
 import numpy as np
 import matplotlib.pyplot as plt
 from labptptm1 import dataset as dat
 from commplax import comm, xcomm, equalizer as eq, plot as cplt
-```
 
-### Work the example
-
-```{code-block}
-:class: thebe
-
-# download data on demand
+print('downloading data...')
 ds = dat['815km_SSMF/DP16QAM_RRC0.2_28GBd_1ch']
 y = ds['LP-6_5/recv'][:100000]
 
@@ -82,6 +82,7 @@ print('baud rate: %.1f GBd' % (br / 1e9))
 print('launched power: %.3f mW' % (lpw * 1e3))
 print('link distance: %.1f km (measured)' % (dist / 1e3))
 print('number of spans: %d' % spans)
+print('done.')
 ```
 
 ```{code-block}
@@ -95,16 +96,15 @@ z = eq.qamfoe(z)[0] # frequency offset equalization
 z = eq.ekfcpr(z)[0] # finer carrier phase recovery
 
 cplt.scatter(z[40000:45000])
+print('done.')
 ```
 
-This handy interaction is a minimal example of [Jupyter Notebook](https://jupyter.org/), which you will be most likely to live with through the whole learning path.
+This handy interactive run serves as a preview of [Jupyter Notebook](https://jupyter.org/), which you will be most likely to live with through the whole documentation.
 
 See [Equalizers](https://commplax.readthedocs.io/en/latest/tutorial/equalizers.html) for full version of the above example.
 
 
 ## How to use this document
-The documentation is lagging much behind the codebase at this moment, we are actively building the [Tutorial](https://commplax.readthedocs.io/en/latest/tutorial/index.html), of which each page is executable in the cloud by clicking the badges at the top. 
+The documentation is lagging much behind the codebase at this moment, we are actively building the [Tutorial](https://commplax.readthedocs.io/en/latest/tutorial/index.html), of which each page is executable in cloud runtimes by clicking the badges at the top: ![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg), ![Open In Mybinderorg](https://mybinder.org/badge_logo.svg). Since the cloud storage is often not persistent, for long-term use, it is suggested to follow the [Installation](https://commplax.readthedocs.io/en/latest/installation.html) to setup your local environment.
 
 You may refer to the [Public APIs](https://commplax.readthedocs.io/en/latest/commplax.html) for interface details.
-
-

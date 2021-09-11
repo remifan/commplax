@@ -10,7 +10,8 @@ Commplax's reference documentation
    :maxdepth: 1
    :caption: Getting Started
 
-   notebooks/overview
+   overview
+   installation
 
 
 .. toctree::
