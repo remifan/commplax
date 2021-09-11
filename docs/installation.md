@@ -5,7 +5,7 @@ We assume you have seen command-line operations, since the following steps are c
 ```{admonition} Windows
 commplax is built on top of Jax, which does not support Windows at this moment, so neither does commplax. If you are Windows 10+ user, you may try [Windows Subsystem for Linux](https://docs.microsoft.com/en-us/windows/wsl/about), which is an efficient GNU/Linux compatible environment made by Microsoft.
 
-After you have WSL and Linux (e.g., Ubuntu) installed, lauching the linux OS should bring you a terminal prompt, and that's where we starts.
+After you have WSL and WSL/Linux (e.g., Ubuntu) installed, lauching the linux OS should bring you a terminal prompt, and that's where we starts.
 ```
 
 If you are familar with Python virtual enviroment (conda, pipenv...), you may skip to [Install Jax and Commplax](#install-jax-and-commplax).
@@ -16,7 +16,7 @@ If you are familar with Python virtual enviroment (conda, pipenv...), you may sk
 ### why venv?
 Like most programming language, a Python program is essentially the composition of some user scripts and their dependences (packages) installed through package manager (`pip`).
 
-For example, one is programming a GPU pricing prediction which might need package (`scipy`) having linear regression function that itself depends on matrix manipulation package (`numpy`), and it is nice to install a visualizaition package(`matplotlib`) which also depends on `numpy`. The entire dependences have a directed acyclic graph (DAG) structure, meaning that multiple packages might require the same package.
+For example, one is programming a GPU pricing prediction software which relies on package (`scipy`) having linear regression function that itself depends on matrix manipulation package (`numpy`), and it is nice to install a visualizaition package(`matplotlib`) which also depends on `numpy`. The entire dependences have a directed acyclic graph (DAG) structure, meaning that multiple packages might require the same package.
 
 It could be fine at start, but as one has more projects, a new project with package `A` needs recent version of package `C` but package `B` from another earlier project needs the older version of `C`. That's when package conflicts occur, and venv tool supports creating 'workspaces' each with isolated packages resolution.
 
@@ -46,13 +46,13 @@ to exit the current venv
 
 `conda deactivate`
 
-there are many more steps you would need in daily use of conda, see [Conda's intro](https://conda.io/projects/conda/en/latest/user-guide/getting-started.html) for more information.
+there are many more steps you would need in daily use of conda, see [Conda's guide](https://conda.io/projects/conda/en/latest/user-guide/getting-started.html) for more information.
 
 
 ## Install Jax and Commplax
 The majority of commplax functions runs very well(or even better) with CPU only, its GPU version is based on CUDA.
 
-```{note} For regular Window 10 users, WSL currently has no support to use GPU-CUDA, see [WSLg](https://github.com/microsoft/wslg)
+```{note} For regular Window 10 users, WSL currently has no support to use GPU-CUDA, see [WSLg](https://github.com/microsoft/wslg) project
 ```
 
 in your activated 'commplax' venv
@@ -73,7 +73,7 @@ pip install --upgrade https://github.com/remifan/commplax/archive/master.zip
 ```
 
 ### Install for Development
-You can work the source codes by installing commplax on "development mode"
+You can work the commplax's source codes by installing commplax on "development mode"
 
 - install Jax same as the above
 - `git clone https://github.com/remifan/commplax && cd commplax`
