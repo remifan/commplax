@@ -101,7 +101,7 @@ cplt.scatter(z[40000:45000])
 print('done.')
 ```
 
-This handy interactive run serves as an "embedded" preview of [Jupyter Notebook](https://jupyter.org/), which you will be most likely to live with through the whole documentation.
+This multi-step interactive run serves as an "embedded" preview of [Jupyter Notebook](https://jupyter.org/), which you will be most likely to live with through the whole documentation.
 
 See [Equalizers](https://commplax.readthedocs.io/en/latest/tutorial/equalizers.html) for full version of the above example.
 

@@ -87,6 +87,6 @@ Now we need development environment to work within commplax venv, we prefer note
 
 If it feels good, [Install JupyterLab](https://jupyter.org/install.html) through `conda`.
 
-```{note} Though it is convenient to install JupyterLab alongside commplax in the same venv. To minimize the risk of package confilcts, the best practice is to install JupyterLab in a standalone venv, and [add other venvs to JupyterLab](https://stackoverflow.com/a/53546634)
+```{note} Though it is convenient to install JupyterLab alongside commplax in the same venv. To minimize the risk of package confilcts, a better practice is to install JupyterLab in a standalone venv, and [add other venvs to JupyterLab](https://stackoverflow.com/a/53546634)
 ```
 
