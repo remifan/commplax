@@ -21,7 +21,7 @@ Commplax is designed for researchers in (optical) communication community and ma
 ## Quickstart
 The best way to get started with Commplax is through Jupyter's notebook demo, here are some examples
 - [Hello world: demodulation](https://github.com/remifan/commplax/blob/master/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/hello_world.ipynb)
-- [Optimzing stateful layers](https://github.com/remifan/commplax/blob/master/examples/stateful_layer.ipynb) - train Digital Back Propogation (namely DNN-DBP or LDBP) with adaptive filter layers. [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/stateful_layer.ipynb)
+- [Optimzing stateful layers](https://github.com/remifan/commplax/blob/master/examples/stateful_layer.ipynb) - train Digital Back Propogation (namely DNN-DBP or LDBP) with adaptive filter layers ([train stateful model](https://remifan.github.io/gdbp_study/overview.html)). [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/stateful_layer.ipynb)
 - (In progress) work with general DNN - integrate Flax
 
 ## Installation
@@ -40,9 +40,9 @@ _commplax is tested on Python 3.8, jax-0.2.13, jaxlib-0.1.68_
 pip install --upgrade https://github.com/remifan/commplax/archive/master.zip
 ```
 #### install CPU+GPU version
-you must install jaxlib that matches your cuda driver version, for example, if your CUDA version is 11.0,
+you must install jaxlib that matches your cuda driver version, for example, if your CUDA version is 11.1,
 ```
-pip install --upgrade jax==0.2.13 jaxlib==0.1.66+cuda110 -f https://storage.googleapis.com/jax-releases/jax_releases.html
+pip install --upgrade jax==0.2.13 jaxlib==0.1.66+cuda111 -f https://storage.googleapis.com/jax-releases/jax_releases.html
 ```
 
 after jaxlib+cuda is installed,
