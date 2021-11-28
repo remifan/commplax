@@ -15,6 +15,7 @@
 
 import numpy as np
 from scipy import signal
+from functools import partial
 
 
 def dbp_2d(y, h, phi):
@@ -26,6 +27,13 @@ def dbp_2d(y, h, phi):
         y[:,1] = np.convolve(y[:,1], h[i,:,1], mode='same')
 
     return y
+
+
+def vconv(x, y, mode='full', **kwargs):
+    """ vectorized convolution """
+    conv = np.vectorize(partial(np.convolve, mode=mode, **kwargs), signature='(n),(m)->(k)')
+    z = conv(x.T, y.T).T
+    return z
 
 
 def resample(x, p, q, axis=0):

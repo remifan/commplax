@@ -236,6 +236,15 @@ def rcosdesign(beta, span, sps, shape='normal', dtype=np.float64):
     return b
 
 
+def upsample(x, n, axis=0, trim=False):
+    x = np.atleast_1d(x)
+    x = signal.upfirdn([1], x, n, axis=axis)
+    pads = np.zeros((x.ndim, 2), dtype=int)
+    pads[axis, 1] = n - 1
+    y = x if trim else np.pad(x, pads)
+    return y
+
+
 def resample(x, p, q, axis=0):
     p = int(p)
     q = int(q)

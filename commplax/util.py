@@ -17,6 +17,7 @@ import re
 import os
 import jax
 from jax.tree_util import tree_map, tree_flatten, tree_unflatten, tree_structure, treedef_is_leaf
+from jax.interpreters import xla
 from commplax.third_party import namedtuple_pprint
 from functools import partial, update_wrapper
 from flax.traverse_util import flatten_dict, unflatten_dict
@@ -198,4 +199,12 @@ def load_variable(path):
     with open(path, 'rb') as f:
         msg = f.read()
     return freeze(serialization.msgpack_restore(msg))
+
+
+def clear_xla_cache():
+    ''' 
+    compile cache grows without bound, clear on finish otherwise Colab might complain 
+    about insufficient RAM. TODO: try to reuse model during initialization to save compilation
+    '''
+    xla._xla_callable.cache_clear() 
 

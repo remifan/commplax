@@ -21,6 +21,7 @@ from functools import partial
 from jax import numpy as jnp
 from commplax import comm, xcomm, xop, cxopt
 from jax.tree_util import tree_flatten, tree_unflatten
+from jax.lax import stop_gradient
 from commplax.cxopt import Schedule
 
 Array = Any
@@ -60,7 +61,7 @@ def adaptive_filter(af_maker: Callable, trainable=False):
             else:
                 af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
             af_inp = jax.device_put(af_inp)
-            af_state, af_out = jax.lax.stop_gradient(update(i, af_state, af_inp))
+            af_state, af_out = stop_gradient(update(i, af_state, af_inp))
             return af_state, af_out
 
         @jax.jit
@@ -131,8 +132,8 @@ def mimo(w, u):
 
 
 def r2c(r):
-    '''
-    convert x from
+    ''' Pack real-valued signal into complex-valued signal
+    for example, converting
     [[ 0.  0.  1. -1.]
      [ 2. -2.  3. -3.]
      [ 4. -4.  5. -5.]
@@ -154,8 +155,8 @@ def r2c(r):
 
 
 def c2r(c):
-    '''
-    convert x from
+    ''' Unpack complex-valued signal into real-valued signal
+    for example, converting
     [[0.+0.j 1.-1.j]
      [2.-2.j 3.-3.j]
      [4.-4.j 5.-5.j]
@@ -199,6 +200,62 @@ def mimoinitializer(taps, dims, dtype, initkind):
     else:
         raise ValueError('invalid initkind %s' % initkind)
     return w0
+
+
+def decision(const, v, stopgrad=True):
+    """ simple symbol decision based on Euclidean distance
+    """
+    if v.ndim > 1:
+        raise ValueError(f'ndim = 1 is expected, but got {v.ndim} instead')
+
+    dims = v.shape[-1]
+    dim_axis = tuple(range(1, dims + 1))
+    d = const[jnp.argmin(jnp.abs(jnp.expand_dims(const, axis=dim_axis) - v[None, ...]),
+                         axis=0)]
+    return stop_gradient(d) if stopgrad else d
+
+
+@adaptive_filter
+def lms(
+    lr: Union[float, Schedule] = 1e-4,
+    const: Optional[Array]=comm.const('16QAM', norm=True)
+) -> AdaptiveFilter:
+    """LMS MIMO adaptive filter.
+
+    Args:
+      lr: Optional; learning rate
+      const: Optional; constellation used to infer R2 when R2 is None
+
+    Returns:
+      an ``AdaptiveFilter`` object
+    """
+    lr = cxopt.make_schedule(lr)
+    if const is not None:
+        const = jnp.asarray(const)
+
+    def init(w0=None, taps=19, dims=2, dtype=np.complex64):
+        if w0 is None:
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+        return w0.astype(dtype)
+
+    def loss_fn(w, u):
+        v = r2c(mimo(w, u)[None, :])[0, :]
+        d = decision(const, v)
+        loss = jnp.sum(jnp.abs(d - v)**2)
+        return loss
+
+    def update(i, w, u):
+        l, g = jax.value_and_grad(loss_fn)(w, u)
+        out = (w, l)
+        w = w - lr(i) * g.conj()
+        return w, out
+
+    def apply(ws, yf):
+        return jax.vmap(mimo)(ws, yf)
+
+    return AdaptiveFilter(init, update, apply)
 
 
 @adaptive_filter
@@ -456,11 +513,12 @@ def ddlms(
         u, x = inp
 
         v = mimo(w, u)
+        # v = r2c(mimo(w, u)[None, :])[0, :]
         k = v * f
         c = k * s
         z = c + b
         q = v * fshat + b
-        d = jnp.where(train(i), x, const[jnp.argmin(jnp.abs(const[:,None] - q[None,:]), axis=0)])
+        d = jnp.where(train(i), x, decision(const, q))
         l = jnp.sum(jnp.abs(z - d)**2)
 
         psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
