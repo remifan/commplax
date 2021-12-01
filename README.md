@@ -20,8 +20,8 @@ Commplax is designed for researchers in (optical) communication community and ma
 
 ## Quickstart
 The best way to get started with Commplax is through Jupyter's notebook demo, here are some examples
-- [Hello world: demodulation](https://github.com/remifan/commplax/blob/master/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/docs/tutorial/equalizers.ipynb)
-- [Optimzing stateful layers](https://github.com/remifan/commplax/blob/master/examples/stateful_layer.ipynb) - train Digital Back Propogation (namely DNN-DBP or LDBP) with adaptive filter layers ([DSP as stateful model](https://remifan.github.io/gdbp_study/overview.html)). [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/docs/tutorial/stateful_layer.ipynb)
+- [Demodulation](https://github.com/remifan/commplax/blob/master/docs/tutorial/equalizers.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/docs/tutorial/equalizers.ipynb)
+- [Optimzing stateful layers](https://github.com/remifan/commplax/blob/master/docs/tutorial/stateful_layer.ipynb) - train Digital Back Propogation (namely DNN-DBP or LDBP) with adaptive filter layers ([Research artical](https://remifan.github.io/gdbp_study/overview.html)). [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/docs/tutorial/stateful_layer.ipynb)
 - (In progress) work with general DNN - integrate Flax
 
 ## Installation
@@ -30,11 +30,11 @@ PyPI package is not available yet
 it is recommended to install in Python virtual enviroment (e.g. conda, pipenv).
 
 ### Quick install
-Note jaxlib has no Windows builds yet, Windows 10+ users can use Commplax via [Windows Subsystem for Linux](https://docs.microsoft.com/en-us/windows/wsl/about).
+#### Windows installtion
+Note jaxlib has no Windows builds yet, Windows 10 users can use Commplax via [Windows Subsystem for Linux (WSL)](https://docs.microsoft.com/en-us/windows/wsl/about), however Cuda is not supported.
 
-see [JAX](https://github.com/google/jax#installation) for more installation details.
+We have succesfully run Commplax/JAX/Cuda in WSL2 shipped with Windows 11, see [WSL-Cuda](https://docs.nvidia.com/cuda/wsl-user-guide/index.html) for setup details. However the WSL-Cuda driver keeps randomly freezing our system and only certain versions of JAX are working well.
 
-_commplax is tested on Python 3.8, jax-0.2.13, jaxlib-0.1.68_
 #### install CPU-only version
 ```
 pip install --upgrade https://github.com/remifan/commplax/archive/master.zip
@@ -44,7 +44,7 @@ install latest jax-cuda,
 ```
 pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_releases.html  # Note: wheels only available on linux.
 ```
-you must install jaxlib that matches your cuda driver version,
+you must install jaxlib that is compatible to your Cuda toolkit version,
 ```
 # Installs the wheel compatible with Cuda 11 and cudnn 8.2 or newer.
 pip install jax[cuda11_cudnn82] -f https://storage.googleapis.com/jax-releases/jax_releases.html
