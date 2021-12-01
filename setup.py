@@ -50,7 +50,7 @@ setup(name='commplax',
             'fsspec'
         ],
         'all': [
-            'zarr',
+            'zarr[jupyter]==2.9.5',
             's3fs',
             'fsspec',
             'plotly',
