@@ -211,7 +211,7 @@ def decision(const, v, stopgrad=True):
     dims = v.shape[-1]
     dim_axis = tuple(range(1, dims + 1))
     d = const[jnp.argmin(jnp.abs(jnp.expand_dims(const, axis=dim_axis) - v[None, ...]),
-                         axis=0)]
+                         axis=0)][0, ...]
     return stop_gradient(d) if stopgrad else d
 
 

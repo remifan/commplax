@@ -8,3 +8,4 @@ This is a tutorial developed by Commplax's authors
   :caption: Tutorials
 
   equalizers
+  stateful_layer

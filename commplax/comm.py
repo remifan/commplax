@@ -519,7 +519,7 @@ def qamqot(y, x, count_dim=True, count_total=True, L=None, eval_range=(0, 0), sc
     return df
 
 
-def qamqot_local(y, x, frame_size=10000, L=None):
+def qamqot_local(y, x, frame_size=10000, L=None, scale=1, eval_range=None):
 
     y = shape_signal(y)
     x = shape_signal(x)
@@ -532,7 +532,7 @@ def qamqot_local(y, x, frame_size=10000, L=None):
 
     zf = [(yf, xf) for yf, xf in zip(Y, X)]
 
-    f = lambda z: qamqot(z[0], z[1], count_dim=True, L=L).to_numpy()
+    f = lambda z: qamqot(z[0], z[1], count_dim=True, L=L, scale=scale).to_numpy()
 
     qot_local = np.stack(list(map(f, zf)))
 

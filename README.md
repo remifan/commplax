@@ -20,8 +20,8 @@ Commplax is designed for researchers in (optical) communication community and ma
 
 ## Quickstart
 The best way to get started with Commplax is through Jupyter's notebook demo, here are some examples
-- [Hello world: demodulation](https://github.com/remifan/commplax/blob/master/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/hello_world.ipynb)
-- [Optimzing stateful layers](https://github.com/remifan/commplax/blob/master/examples/stateful_layer.ipynb) - train Digital Back Propogation (namely DNN-DBP or LDBP) with adaptive filter layers ([train stateful model](https://remifan.github.io/gdbp_study/overview.html)). [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/examples/stateful_layer.ipynb)
+- [Hello world: demodulation](https://github.com/remifan/commplax/blob/master/examples/hello_world.ipynb) - demodulate DP-16QAM 815km SSMF signal [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/docs/tutorial/equalizers.ipynb)
+- [Optimzing stateful layers](https://github.com/remifan/commplax/blob/master/examples/stateful_layer.ipynb) - train Digital Back Propogation (namely DNN-DBP or LDBP) with adaptive filter layers ([DSP as stateful model](https://remifan.github.io/gdbp_study/overview.html)). [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/remifan/commplax/blob/master/docs/tutorial/stateful_layer.ipynb)
 - (In progress) work with general DNN - integrate Flax
 
 ## Installation
@@ -40,18 +40,21 @@ _commplax is tested on Python 3.8, jax-0.2.13, jaxlib-0.1.68_
 pip install --upgrade https://github.com/remifan/commplax/archive/master.zip
 ```
 #### install CPU+GPU version
-you must install jaxlib that matches your cuda driver version, for example, if your CUDA version is 11.1,
+install latest jax-cuda,
 ```
-pip install --upgrade jax==0.2.13 jaxlib==0.1.66+cuda111 -f https://storage.googleapis.com/jax-releases/jax_releases.html
+pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_releases.html  # Note: wheels only available on linux.
 ```
+you must install jaxlib that matches your cuda driver version,
+```
+# Installs the wheel compatible with Cuda 11 and cudnn 8.2 or newer.
+pip install jax[cuda11_cudnn82] -f https://storage.googleapis.com/jax-releases/jax_releases.html
+```
+see [JAX Installtion](https://github.com/google/jax#installation) for more information.
 
 after jaxlib+cuda is installed,
 ```
 pip install --upgrade https://github.com/remifan/commplax/archive/master.zip
 ```
-
-#### install TPU version
-Cloud TPU VM jaxlib seems available, it is possible to run commplax in TPU. Will study TPU backend soon.
 
 ### Development
 - follow [JAX](https://github.com/google/jax)'s guide to install JAX-CPU/GPU
