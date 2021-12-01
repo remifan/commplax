@@ -29,27 +29,32 @@ setup(name='commplax',
     url='https://github.com/remifan/commplax',
     packages=find_packages(),
     install_requires=[
-        'jax==0.2.13',
-        'jaxlib==0.1.66',
-        'flax==0.3.4',
+        'jax>=0.2.13',
+        'jaxlib>=0.1.66',
+        'flax>=0.3.4',
         'seaborn',
-        'plotly',
         'quantumrandom'
     ],
     extras_require={
         'dev': [
-            'tqdm',
             'attr',
             'mock',
             'pytest',
             'parameterized',
             'ipykernel',
-            'ipympl'
+            'ipympl',
         ],
         'fs': [
             'zarr',
             's3fs',
             'fsspec'
+        ],
+        'all': [
+            'zarr',
+            's3fs',
+            'fsspec',
+            'plotly',
+            'tqdm'
         ]
     },
     license='Apache-2.0',
