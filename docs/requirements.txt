@@ -4,5 +4,6 @@ jupyter-sphinx
 myst-nb
 ipykernel
 sphinx-thebe
+ipywidgets
 
 .[fs]  # install commplax from the current directory
