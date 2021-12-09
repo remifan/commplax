@@ -101,7 +101,7 @@ html_static_path = ['_static']
 
 # -- Options for myst ----------------------------------------------
 myst_enable_extensions = ["tasklist"]
-jupyter_execute_notebooks = "auto"
+jupyter_execute_notebooks = "off"
 execution_allow_errors = False
 execution_fail_on_error = True  # Requires https://github.com/executablebooks/MyST-NB/pull/296
 
