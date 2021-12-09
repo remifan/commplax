@@ -10,6 +10,9 @@ docs/_autosummary
 # vim
 .vim
 
+# vscode
+.vscode
+
 # mac
 .DS_Store
 # Thumbnails

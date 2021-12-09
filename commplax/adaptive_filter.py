@@ -208,10 +208,8 @@ def decision(const, v, stopgrad=True):
     if v.ndim > 1:
         raise ValueError(f'ndim = 1 is expected, but got {v.ndim} instead')
 
-    dims = v.shape[-1]
-    dim_axis = tuple(range(1, dims + 1))
-    d = const[jnp.argmin(jnp.abs(jnp.expand_dims(const, axis=dim_axis) - v[None, ...]),
-                         axis=0)][0, ...]
+    d = const[jnp.argmin(jnp.abs(const[:, None] - v[None, :]),
+                         axis=0)]
     return stop_gradient(d) if stopgrad else d
 
 
