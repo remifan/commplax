@@ -18,7 +18,7 @@ from jax import jit, vmap, numpy as jnp, device_put
 from jax.core import Value
 import numpy as np
 from commplax import xop, comm, experimental as exp
-from functools import partial
+from functools import partial, reduce
 
 
 def getpower(x, axis=0, real=False):
@@ -283,3 +283,42 @@ def localdc(signal, frame_size=5000, frame_step=1000):
     return xop.framescaninterp(y, dceval, frame_size, frame_step)
 
 
+def block_metric(z, x, blocksize=20000, modformat='16QAM'):
+
+    @jit
+    def is_correlated(a, b):
+        corr_threshold = blocksize/2
+        ''' tells whether a and b are correlated (exceeds target threshold) '''
+        c = jnp.abs(xop.correlate(a, b, mode='full', method='fft'))
+        return jnp.any(c > corr_threshold)
+    
+    i = 0
+    metric = []
+    iscorr = []
+    
+    while i + blocksize < len(z):
+        u = z[i: i + blocksize]
+        
+        m = [[is_correlated(u[:, 0], x[:, 0]), is_correlated(u[:, 0], x[:, 1])],
+             [is_correlated(u[:, 1], x[:, 0]), is_correlated(u[:, 1], x[:, 1])]]
+
+        if jnp.array_equal(m, jnp.array([[True, False], [False, True]])):
+            # u[:, 0] is x[:, 0], u[:, 1] is x[:, 1]
+            pass
+        elif jnp.array_equal(m, jnp.array([[False, True], [True, False]])):
+            # # u[:, 1] is x[:, 0], u[:, 0] is x[:, 1]
+            # swap the polarizations of u
+            u = jnp.stack((u[:, 1], u[:, 0]), axis=-1)
+        
+        v = repalign(u, x)
+        u = alignphase(u, v) * qamscale(modformat)
+        
+        metric.append(comm.qamqot(u, v))
+        iscorr.append(np.array(m) * 1)
+        
+        i += blocksize
+        
+    metric = reduce(lambda df1, df2: df1.combine(df2, lambda a, b: a + b),
+                    [m.applymap(lambda x: [x]) for m in metric])
+    
+    return metric, iscorr

@@ -38,7 +38,7 @@ def glance(x):
         waveform(x[:,ch], axes=[asp(gs[1, ch]), asp(gs[2, ch])])
 
 
-def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None, dpi=100):
+def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None, figsize=(7, 7), dpi=100):
     signal = np.atleast_1d(signal)
     if not np.iscomplex(signal).any():
         raise ValueError(f'expect complex input, got {signal.dtype} instead')
@@ -48,7 +48,7 @@ def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None
       
     dims = signal.shape[1]
     
-    fig, axes = plt.subplots(1, dims, dpi=dpi, sharex=True, sharey=True)
+    fig, axes = plt.subplots(1, dims, figsize=figsize, dpi=dpi, sharex=True, sharey=True)
     
     if dims == 1:
         axes = [axes]

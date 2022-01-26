@@ -606,3 +606,34 @@ def firfreqz(h, sr=1, N=8192, t0=None, bw=None):
     return w, H
 
 
+def iqdelay(data, fs, delay):
+    from numpy.fft import fft, ifft, fftshift
+    
+    n = len(data)
+    
+    if n % 2 == 1:
+        n *= 2
+        data = np.concatenate([data, data])
+        dflag = True
+    else:
+        dflag = False
+        
+    # convert to frequency domain
+    fdata = fftshift(fft(data.real)) / n
+    # create linear phase vector (= delay)
+    phd = np.arange(-n/2, n/2) / n * 2 * np.pi * (delay * fs)
+    # convert it into frequency domain
+    fdelay = np.exp(1j * -phd)
+    # apply delay (convolution ~ multiplication)
+    fresult = fdata * fdelay
+    # ...and convert back into time domain
+    result = ifft(fftshift(fresult)).real * n
+    
+    # get imaginary part from input vector
+    if not np.isrealobj(data):
+        result = result + 1j * data.imag
+    
+    if dflag:
+        result = result[1: n / 2 + 1]
+    
+    return result
