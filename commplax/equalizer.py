@@ -52,7 +52,7 @@ def cdcomp(signal, sr, CD, fc=193.4e12, taps=None, polmux=True, mode='SAME', bac
     return tddbp(signal, sr, 0., dist, 1, taps, xi=0., D=D, polmux=polmux, mode=mode, backend=backend)
 
 
-def modulusmimo(signal, sps=2, taps=32, lr=2**-14, cma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
+def modulusmimo(signal, sps=2, taps=32, lr1=2**-14, lr2=2**-14, cma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
     '''
     Adaptive MIMO equalizer for M-QAM signal
     '''
@@ -65,36 +65,35 @@ def modulusmimo(signal, sps=2, taps=32, lr=2**-14, cma_samples=20000, modformat=
         const = comm.const(modformat, norm=True)
 
     R2 = np.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
-    Rs = np.array(np.unique(np.abs(const)))
+    Rs, Rs_counts = np.array(np.unique(np.abs(const), return_counts=True))
+    Ps = np.array(Rs_counts / const.shape[0])
+
+    y = jnp.asarray(signal)
+    dims = y.shape[-1]
+    # prepare adaptive filters
+    cma_init, cma_update, _ = af.mucma(R2=R2, lr=lr1, dims=dims)
+    # rde_init, rde_update, rde_map = af.cma(R2=R2, lr=lr2)
+    rde_init, rde_update, rde_map = af.rde(Rs=Rs, lr=lr2)
+    rde_init, rde_update, rde_map = af.lbs_rde(Rs=Rs, Ps=Ps, lr=lr2)
+
+    def _modulusmimo(y, sps, taps, cma_samples):
+        # framing signal to enable parallelization (a.k.a `jax.vmap`)
+        yf = af.frame(y, taps, sps)
+        # get initial weights
+        s0 = cma_init(taps=taps, dtype=y.dtype)
+        # initialize MIMO via MU-CMA to avoid singularity
+        (w0, *_,), (ws1, loss1) = af.iterate(cma_update, 0, s0, yf[:cma_samples])[1]
+        # switch to RDE
+        _, (ws2, loss2) = af.iterate(rde_update, 0, w0, yf[cma_samples:])[1]
+        loss = jnp.concatenate([loss1, loss2], axis=0)
+        ws = jnp.concatenate([ws1, ws2], axis=0)
+        x_hat = rde_map(ws, yf)
+
+        return x_hat, ws, loss
 
     return jit(_modulusmimo,
-               static_argnums=(3, 4, 5),
-               backend=backend)(y, R2, Rs, sps, taps, cma_samples, lr)
-
-
-def _modulusmimo(y, R2, Rs, sps, taps, cma_samples, lr):
-    # prepare adaptive filters
-
-    y = jnp.asarray(y)
-
-    dims = y.shape[-1]
-    cma_init, cma_update, _ = af.mucma(R2=R2, dims=dims)
-    rde_init, rde_update, rde_map = af.rde(Rs=Rs, lr=lr)
-
-    # framing signal to enable parallelization (a.k.a `jax.vmap`)
-    yf = af.frame(y, taps, sps)
-
-    # get initial weights
-    s0 = cma_init(taps=taps, dtype=y.dtype)
-    # initialize MIMO via MU-CMA to avoid singularity
-    (w0, *_,), (ws1, loss1) = af.iterate(cma_update, 0, s0, yf[:cma_samples])[1]
-    # switch to RDE
-    _, (ws2, loss2) = af.iterate(rde_update, 0, w0, yf[cma_samples:])[1]
-    loss = jnp.concatenate([loss1, loss2], axis=0)
-    ws = jnp.concatenate([ws1, ws2], axis=0)
-    x_hat = rde_map(ws, yf)
-
-    return x_hat, ws, loss
+               static_argnums=(1, 2, 3),
+               backend=backend)(y, sps, taps, cma_samples)
 
 
 def lmsmimo(signal, truth, sps=2, taps=31,
@@ -171,7 +170,10 @@ def framekfcpr(signal, truth=None, n=100, w0=None, modformat='16QAM', const=None
 
 def _framekfcpr(y, x, n, w0, const):
     dims = y.shape[-1]
-    cpr_init, cpr_update, cpr_map = af.array(af.frame_cpr_kf, dims)(alpha=0.98, const=const)
+    cpr_init, cpr_update, cpr_map = af.array(af.frame_cpr_kf, dims)(alpha=0.98,
+                                                                    R=jnp.array([[1e-2, 0],
+                                                                                 [0, 1e-4]]),
+                                                                    const=const)
 
     yf = xop.frame(y, n, n)
     xf = xop.frame(x, n, n) if x is not None else x

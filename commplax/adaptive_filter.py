@@ -394,11 +394,13 @@ def mucma(
 
 
 @partial(adaptive_filter, trainable=True)
-def rde(
+def lbs_rde(
     lr: Union[float, Schedule] = 2**-15,
     train: Union[bool, Schedule] = False,
-    Rs: Array = jnp.unique(jnp.abs(comm.const("16QAM", norm=True))),
-    const: Optional[Array] = None
+    Rs: Array = jnp.array(np.unique(abs(comm.const("16QAM", norm=True)))),
+    Ps: Array = jnp.array(np.unique(abs(comm.const("16QAM", norm=True)), return_counts=True)[1]/16),
+    SNRdB=25,
+    alpha_th=0.85,
 ) -> AdaptiveFilter:
     """Radius Directed adaptive Equalizer
 
@@ -413,12 +415,102 @@ def rde(
       an ``AdaptiveFilter`` object
 
     References:
+      - [1] Dris, S., Alreesh, S. and Richter, A., 2019, March. Blind polarization
+            demultiplexing and equalization of probabilistically shaped QAM. In Optical
+            Fiber Communication Conference (pp. W1D-2). Optical Society of America.
+      - [2] Di Rosa, G. and Richter, A., 2020, December. Blind Radius Directed Equalizer
+            with Likelihood-based Selection for Probabilistically Shaped and High Order QAM.
+            In 2020 European Conference on Optical Communications (ECOC) (pp. 1-4). IEEE.
+    """
+    from scipy.stats import rice
+
+    def lbs(Rk, Pk, SNRdB, signal_power=1.):
+        SNR = 10**(SNRdB / 10)
+        delta = np.sqrt(signal_power / SNR)
+        nbins = 20
+        Bd = []
+        M = Rk.shape[0]
+
+        for i, j in zip(range(M), range(1, M)):
+            rvi = rice(Rk[i] / delta, scale=delta)
+            rvj = rice(Rk[j] / delta, scale=delta)
+            p_err = lambda a: Pk[i] * (1 - rvi.cdf(a)) + Pk[j] * rvj.cdf(a)
+            A = np.linspace(Rk[i], Rk[j], nbins)
+            Bd.append(A[np.argmin(p_err(A))])
+        Bd = jnp.array(Bd)
+
+        Rk_m = jnp.array([rice.stats(r / delta, scale=delta, moments='m') for r in Rk]) 
+
+        @np.vectorize
+        def _alpha(a):
+            D = np.sum([p * rice.pdf(a, r / delta, scale=delta) for p, r in zip(Pk, Rk)])
+            N = np.array([p * rice.pdf(a, r / delta, scale=delta) for p, r in zip(Pk, Rk)])
+            return np.max(N / D)
+        
+        A = jnp.linspace(1e-8, 1.2 * jnp.max(Rk), 100)
+        alpha = jnp.array(_alpha(A))
+        alpha_fn = jnp.vectorize(lambda a: alpha[jnp.digitize(a, A)])
+
+        return Rk_m, Bd, alpha_fn
+
+    lr = cxopt.make_schedule(lr)
+    train = cxopt.make_schedule(train)
+    Rs, Bd, alpha_fn = lbs(Rs, Ps, SNRdB, signal_power=1.)
+
+    def init(dims=2, w0=None, taps=32, dtype=np.complex64):
+        if w0 is None:
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+        return w0
+
+    def loss_fn(w, u, x, i):
+        v = r2c(mimo(w, u)[None, :])[0, :]
+        R2 = jnp.where(train(i),
+                       jnp.abs(x)**2,
+                       Rs[jnp.digitize(jnp.abs(v), Bd)]**2)
+        l_dim = jnp.where(alpha_fn(v) > alpha_th,
+                          jnp.abs((stop_gradient(R2) - jnp.abs(v)**2))**2,
+                          0.)
+        return jnp.sum(l_dim)
+
+    def update(i, w, inp):
+        u, x = inp
+        l, g = jax.value_and_grad(loss_fn)(w, u, x, i)
+        out = (w, l)
+        w = w - lr(i) * g.conj()
+        return w, out
+
+    def apply(ws, yf):
+        return jax.vmap(mimo)(ws, yf)
+
+    return AdaptiveFilter(init, update, apply)
+
+
+@partial(adaptive_filter, trainable=True)
+def rde(
+    lr: Union[float, Schedule] = 2**-15,
+    train: Union[bool, Schedule] = False,
+    Rs: Array = jnp.unique(jnp.abs(comm.const("16QAM", norm=True))),
+    const: Optional[Array] = None
+) -> AdaptiveFilter:
+    """Radius Directed adaptive Equalizer
+    Args:
+      lr: learning rate. scalar or Schedule
+      train: schedule training mode, which can be a bool for global control within one call
+        or an array of bool to swich training on iteration basis
+      Rs: the radii of the target constellation
+      const: Optional; constellation used to infer R2 when R2 is None
+    Returns:
+      an ``AdaptiveFilter`` object
+    References:
       - [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
         carrier phase recovery in a 16-QAM optical coherent system. Journal
         of lightwave technology, 27(15), pp.3042-3049.
     """
     lr = cxopt.make_schedule(lr)
     train = cxopt.make_schedule(train)
+    Rs = jnp.asarray(Rs)
 
     if const is not None:
         Rs = jnp.array(jnp.unique(jnp.abs(const)))
@@ -431,20 +523,35 @@ def rde(
         return w0
 
     def loss_fn(w, u, x, i):
-        v = r2c(mimo(w, u)[None,:])
+        v = mimo(w, u)[None,:]
+        R2 = jnp.where(train(i),
+                       jnp.abs(x)**2,
+                       Rs[jnp.argmin(
+                           jnp.abs(Rs[:,None] - jnp.abs(v)),
+                           axis=0)]**2)
+        l = jnp.sum(jnp.abs(stop_gradient(R2) - jnp.abs(v[0,:])**2)**2)
+        return l
+
+    def grad_rde(i, w, u, x):
+        v = mimo(w, u)[None,:]
+        print(u.shape)
+        print(w.shape)
         R2 = jnp.where(train(i),
                        jnp.abs(x)**2,
                        Rs[jnp.argmin(
                            jnp.abs(Rs[:,None] * v / jnp.abs(v) - v),
                            axis=0)]**2)
-        l = jnp.sum(jnp.abs(R2 - jnp.abs(v[0,:])**2))
-        return l
+        l = jnp.sum(jnp.abs(stop_gradient(R2) - jnp.abs(v[0,:])**2))
+        g = -2 * (v[0, :] * (R2 - jnp.abs(v[0, :])**2))[...,None,None] * jnp.conj(u).T[None,...]
+        print(g.shape)
+        return g
 
     def update(i, w, inp):
         u, x = inp
         l, g = jax.value_and_grad(loss_fn)(w, u, x, i)
         out = (w, l)
         w = w - lr(i) * g.conj()
+        # w = w - lr(i) * grad_rde(i, w, u, x)
         return w, out
 
     def apply(ws, yf):
