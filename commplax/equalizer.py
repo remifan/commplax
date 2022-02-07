@@ -102,7 +102,7 @@ def ekffoe(x, block_size=100, const="16QAM", apply_to=None, apply_to_sps=2, tap_
     return y if apply_to is None else (y, z)
 
 
-def efkcpr(x, const="16QAM", tap_fn=lambda *a:None):
+def ekfcpr(x, const="16QAM", tap_fn=lambda *a:None):
     x = jnp.asarray(x)
     cpr = chk.CPANEEKFCPR(const=const)
     z = cpr(x)
