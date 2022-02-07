@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+from argparse import ArgumentError
 import jax
 import functools
 import numpy as np
@@ -52,7 +53,6 @@ def adaptive_filter(af_maker: Callable, trainable=False):
             x0 = init(*args, **kwargs)
             return jax.device_put(x0)
 
-        @jax.jit
         @functools.wraps(update)
         def _update(i, af_state, af_inp):
             if trainable:
@@ -64,7 +64,6 @@ def adaptive_filter(af_maker: Callable, trainable=False):
             af_state, af_out = stop_gradient(update(i, af_state, af_inp))
             return af_state, af_out
 
-        @jax.jit
         @functools.wraps(apply)
         def _apply(af_ps, af_xs):
             return apply(af_ps, af_xs)
@@ -89,13 +88,11 @@ def array(af_maker, replicas, axis=-1):
             x0 = tree_unflatten(x0_tree, x0_flat)
             return x0
 
-        @jax.jit
         @functools.wraps(update)
         def rep_update(i, af_state, af_inp):
             af_state, af_out = jax.vmap(update, in_axes=(None, axis, axis), out_axes=axis)(i, af_state, af_inp)
             return af_state, af_out
 
-        @jax.jit
         @functools.wraps(apply)
         def rep_apply(af_ps, af_xs):
             return jax.vmap(apply, in_axes=axis, out_axes=axis)(af_ps, af_xs)
@@ -111,6 +108,18 @@ def frame(y, taps, sps, rtap=None):
     return yf
 
 
+def train_schedule(s):
+    def periodic(p: Any, q: Any):
+        def schedule(i):
+            return i % q < p
+        return schedule
+
+    if s.lower() == 'periodic':
+        return periodic
+    else:
+        raise ArgumentError(f'{s} is not a valid schedule')
+
+
 def iterate(update: UpdateFn,
             step0: Step,
             state: AFState,
@@ -124,7 +133,7 @@ def iterate(update: UpdateFn,
     padw_data_axes = ((0, 0),) * (truth_ndim - 1)
     truth = jnp.pad(truth, ((0, signal.shape[0] - truth.shape[0]), *padw_data_axes))
     xs = (steps, signal, truth)
-    return steps[-1], xop.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs, jit_device=device)
+    return steps[-1], jax.lax.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs)
 
 
 def mimo(w, u):
@@ -145,9 +154,7 @@ def r2c(r):
      [6.-6.j 7.-7.j]]
     '''
     if not jnp.iscomplexobj(r):
-        if r.ndim != 2:
-            raise ValueError('invalid ndim, expected 2 but got %d' % r.ndim)
-        r = r.reshape((r.shape[0], r.shape[-1] // 2, -1))
+        r = r.reshape((*r.shape[:-1], r.shape[-1] // 2, -1))
         c = r[..., 0] + 1j * r[..., 1]
     else:
         c = r
@@ -168,9 +175,7 @@ def c2r(c):
      [ 6. -6.  7. -7.]]
     '''
     if jnp.iscomplexobj(c):
-        if c.ndim != 2:
-            raise ValueError('invalid ndim, expected 2 but got %d' % c.ndim)
-        r = jnp.stack([c.real, c.imag], axis=-1).reshape((c.shape[0], -1))
+        r = jnp.stack([c.real, c.imag], axis=-1).reshape((*c.shape[:-1], -1))
     else:
         r = c
     return r
@@ -288,12 +293,13 @@ def cma(
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
-    def init(w0=None, taps=19, dims=2, dtype=np.complex64):
+    def init(shape=(2, 2, 32), dtype=jnp.complex64, w0=None):
         if w0 is None:
-            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            taps = shape[-1]
+            dims = shape[0]
             ctap = (taps + 1) // 2 - 1
-            w0[np.arange(dims), np.arange(dims), ctap] = 1.
-        return w0.astype(dtype)
+            w0 = jnp.zeros(shape, dtype=dtype).at[np.arange(dims), np.arange(dims), ctap].set(1.)
+        return w0
 
     def loss_fn(w, u):
         v = r2c(mimo(w, u)[None, :])[0, :]
@@ -346,20 +352,22 @@ def mucma(
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
-    def init(w0=None, taps=19, dtype=np.complex64):
+    def init(shape=(2, 2, 32), dtype=jnp.complex64, w0=None):
         if w0 is None:
-            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            taps = shape[-1]
+            dims = shape[0]
             ctap = (taps + 1) // 2 - 1
-            w0[np.arange(dims), np.arange(dims), ctap] = 1.
-
-        w0 = jnp.asarray(w0).astype(dtype)
+            w0 = jnp.zeros(shape, dtype=dtype).at[np.arange(dims), np.arange(dims), ctap].set(1.)
+        else:
+            taps = w0.shape[2]
+            dims = w0.shape[0]
         z = jnp.zeros((delta, dims), dtype=dtype)
         r = jnp.zeros((dims, dims, delta), dtype=dtype)
         return w0, z, r, jnp.asarray(beta)
 
     def update(i, state, u):
         w, z, r, betapow = state
-        z = jnp.concatenate((r2c(mimo(w, u)[None, :]), z[:-1,:]))
+        z = jnp.concatenate((mimo(w, u)[None, :], z[:-1,:]))
         z0 = jnp.repeat(z, dims, axis=-1)
         z1 = jnp.tile(z, (1, dims))
         rt = jax.vmap(lambda a, b: a[0] * b.conj(), in_axes=-1, out_axes=0)(z0, z1).reshape(r.shape)
@@ -386,100 +394,6 @@ def mucma(
         betapow *= beta
         state = (w, z, r, betapow)
         return state, out
-
-    def apply(ws, yf):
-        return jax.vmap(mimo)(ws, yf)
-
-    return AdaptiveFilter(init, update, apply)
-
-
-@partial(adaptive_filter, trainable=True)
-def lbs_rde(
-    lr: Union[float, Schedule] = 2**-15,
-    train: Union[bool, Schedule] = False,
-    Rs: Array = jnp.array(np.unique(abs(comm.const("16QAM", norm=True)))),
-    Ps: Array = jnp.array(np.unique(abs(comm.const("16QAM", norm=True)), return_counts=True)[1]/16),
-    SNRdB=25,
-    alpha_th=0.85,
-) -> AdaptiveFilter:
-    """Radius Directed adaptive Equalizer
-
-    Args:
-      lr: learning rate. scalar or Schedule
-      train: schedule training mode, which can be a bool for global control within one call
-        or an array of bool to swich training on iteration basis
-      Rs: the radii of the target constellation
-      const: Optional; constellation used to infer R2 when R2 is None
-
-    Returns:
-      an ``AdaptiveFilter`` object
-
-    References:
-      - [1] Dris, S., Alreesh, S. and Richter, A., 2019, March. Blind polarization
-            demultiplexing and equalization of probabilistically shaped QAM. In Optical
-            Fiber Communication Conference (pp. W1D-2). Optical Society of America.
-      - [2] Di Rosa, G. and Richter, A., 2020, December. Blind Radius Directed Equalizer
-            with Likelihood-based Selection for Probabilistically Shaped and High Order QAM.
-            In 2020 European Conference on Optical Communications (ECOC) (pp. 1-4). IEEE.
-    """
-    from scipy.stats import rice
-
-    def lbs(Rk, Pk, SNRdB, signal_power=1.):
-        SNR = 10**(SNRdB / 10)
-        delta = np.sqrt(signal_power / SNR)
-        nbins = 20
-        Bd = []
-        M = Rk.shape[0]
-
-        for i, j in zip(range(M), range(1, M)):
-            rvi = rice(Rk[i] / delta, scale=delta)
-            rvj = rice(Rk[j] / delta, scale=delta)
-            p_err = lambda a: Pk[i] * (1 - rvi.cdf(a)) + Pk[j] * rvj.cdf(a)
-            A = np.linspace(Rk[i], Rk[j], nbins)
-            Bd.append(A[np.argmin(p_err(A))])
-        Bd = jnp.array(Bd)
-
-        Rk_m = jnp.array([rice.stats(r / delta, scale=delta, moments='m') for r in Rk]) 
-
-        @np.vectorize
-        def _alpha(a):
-            D = np.sum([p * rice.pdf(a, r / delta, scale=delta) for p, r in zip(Pk, Rk)])
-            N = np.array([p * rice.pdf(a, r / delta, scale=delta) for p, r in zip(Pk, Rk)])
-            return np.max(N / D)
-        
-        A = jnp.linspace(1e-8, 1.2 * jnp.max(Rk), 100)
-        alpha = jnp.array(_alpha(A))
-        alpha_fn = jnp.vectorize(lambda a: alpha[jnp.digitize(a, A)])
-
-        return Rk_m, Bd, alpha_fn
-
-    lr = cxopt.make_schedule(lr)
-    train = cxopt.make_schedule(train)
-    Rs, Bd, alpha_fn = lbs(Rs, Ps, SNRdB, signal_power=1.)
-
-    def init(dims=2, w0=None, taps=32, dtype=np.complex64):
-        if w0 is None:
-            w0 = np.zeros((dims, dims, taps), dtype=dtype)
-            ctap = (taps + 1) // 2 - 1
-            w0[np.arange(dims), np.arange(dims), ctap] = 1.
-        return w0
-
-    def loss_fn(w, u, x, i):
-        v = r2c(mimo(w, u)[None, :])[0, :]
-        R2 = jnp.where(train(i),
-                       jnp.abs(x)**2,
-                       Rs[jnp.digitize(jnp.abs(v), Bd)]**2)
-        l_dim = jnp.where(alpha_fn(v) > alpha_th,
-                          jnp.abs((stop_gradient(R2) - jnp.abs(v)**2))**2,
-                          0.)
-        return jnp.sum(l_dim)
-
-    def update(i, w, inp):
-        u, x = inp
-        l, g = jax.value_and_grad(loss_fn)(w, u, x, i)
-        out = (w, l)
-        w = w - lr(i) * g.conj()
-        return w, out
 
     def apply(ws, yf):
         return jax.vmap(mimo)(ws, yf)
@@ -529,22 +443,8 @@ def rde(
                        Rs[jnp.argmin(
                            jnp.abs(Rs[:,None] - jnp.abs(v)),
                            axis=0)]**2)
-        l = jnp.sum(jnp.abs(stop_gradient(R2) - jnp.abs(v[0,:])**2)**2)
-        return l
-
-    def grad_rde(i, w, u, x):
-        v = mimo(w, u)[None,:]
-        print(u.shape)
-        print(w.shape)
-        R2 = jnp.where(train(i),
-                       jnp.abs(x)**2,
-                       Rs[jnp.argmin(
-                           jnp.abs(Rs[:,None] * v / jnp.abs(v) - v),
-                           axis=0)]**2)
         l = jnp.sum(jnp.abs(stop_gradient(R2) - jnp.abs(v[0,:])**2))
-        g = -2 * (v[0, :] * (R2 - jnp.abs(v[0, :])**2))[...,None,None] * jnp.conj(u).T[None,...]
-        print(g.shape)
-        return g
+        return l
 
     def update(i, w, inp):
         u, x = inp
@@ -552,6 +452,104 @@ def rde(
         out = (w, l)
         w = w - lr(i) * g.conj()
         # w = w - lr(i) * grad_rde(i, w, u, x)
+        return w, out
+
+    def apply(ws, yf):
+        return jax.vmap(mimo)(ws, yf)
+
+    return AdaptiveFilter(init, update, apply)
+
+
+@partial(adaptive_filter, trainable=True)
+def lbs_rde(
+    lr: Union[float, Schedule] = 2**-15,
+    train: Union[bool, Schedule] = False,
+    Rs: Array = jnp.array(np.unique(abs(comm.const("16QAM", norm=True)))),
+    Ps: Array = jnp.array(np.unique(abs(comm.const("16QAM", norm=True)), return_counts=True)[1]/16),
+    SNRdB=14,
+    alpha_th=0.4,
+) -> AdaptiveFilter:
+    """likelihood-based Selection Radius Directed adaptive Equalizer (LBS-RDE)
+
+    Args:
+      lr:       learning rate. scalar or Schedule
+      train:    schedule training mode, which can be a bool for global control within one call
+                or an array of bool to swich training on iteration basis
+      Rs:       the radii of the target constellation
+      Ps:       probabilites of Rs
+      SNRdB:    SNR as priori
+      alpha_th: likelyhood threshold that triggers update
+
+    Returns:
+      an ``AdaptiveFilter`` object
+
+    References:
+      - [1] Dris, S., Alreesh, S. and Richter, A., 2019, March. Blind polarization
+            demultiplexing and equalization of probabilistically shaped QAM. In Optical
+            Fiber Communication Conference (pp. W1D-2). Optical Society of America.
+      - [2] Di Rosa, G. and Richter, A., 2020, December. Blind Radius Directed Equalizer
+            with Likelihood-based Selection for Probabilistically Shaped and High Order QAM.
+            In 2020 European Conference on Optical Communications (ECOC) (pp. 1-4). IEEE.
+    """
+    from scipy.stats import rice
+
+    def lbs(Rk, Pk, SNRdB, signal_power=1.):
+        SNR = 10**(SNRdB / 10)
+        delta = np.sqrt(signal_power / SNR)
+        nbins = 20
+        M = Rk.shape[0]
+
+        # optimal decision boundaries
+        Bd = []
+        for i, j in zip(range(M), range(1, M)):
+            rvi = rice(Rk[i] / delta, scale=delta)
+            rvj = rice(Rk[j] / delta, scale=delta)
+            p_err = lambda a: Pk[i] * (1 - rvi.cdf(a)) + Pk[j] * rvj.cdf(a)
+            A = np.linspace(Rk[i], Rk[j], nbins)
+            Bd.append(A[np.argmin(p_err(A))])
+        Bd = jnp.array(Bd)
+
+        # optimal reference radii
+        Rk_m = jnp.array([rice.stats(r / delta, scale=delta, moments='m') for r in Rk]) 
+
+        # likelihood
+        @np.vectorize
+        def _alpha(a):
+            D = np.sum([p * rice.pdf(a, r / delta, scale=delta) for p, r in zip(Pk, Rk)])
+            N = np.array([p * rice.pdf(a, r / delta, scale=delta) for p, r in zip(Pk, Rk)])
+            return np.max(N / D)
+        A = jnp.linspace(1e-8, 1.2 * jnp.max(Rk), 100)
+        alpha = jnp.array(_alpha(A))
+        alpha_fn = jnp.vectorize(lambda a: alpha[jnp.digitize(a, A)])
+
+        return Rk_m, Bd, alpha_fn
+
+    lr = cxopt.make_schedule(lr)
+    train = cxopt.make_schedule(train)
+    Rs, Bd, alpha_fn = lbs(Rs, Ps, SNRdB, signal_power=1.)
+
+    def init(dims=2, w0=None, taps=32, dtype=np.complex64):
+        if w0 is None:
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+        return w0
+
+    def loss_fn(w, u, x, i):
+        v = r2c(mimo(w, u)[None, :])[0, :]
+        R2 = jnp.where(train(i),
+                       jnp.abs(x)**2,
+                       Rs[jnp.digitize(jnp.abs(v), Bd)]**2)
+        l_dim = jnp.where(alpha_fn(v) > alpha_th,
+                          jnp.abs((stop_gradient(R2) - jnp.abs(v)**2)),
+                          0.)
+        return jnp.sum(l_dim)
+
+    def update(i, w, inp):
+        u, x = inp
+        l, g = jax.value_and_grad(loss_fn)(w, u, x, i)
+        out = (w, l)
+        w = w - lr(i) * g.conj()
         return w, out
 
     def apply(ws, yf):
@@ -605,8 +603,9 @@ def ddlms(
     lr_b = cxopt.make_schedule(lr_b)
     train = cxopt.make_schedule(train)
 
-    def init(taps=31, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
-        w0 = mimoinitializer(taps, dims, dtype, mimoinit)
+    def init(shape=(2, 2, 32), dtype=jnp.complex64):
+        dims = shape[1]
+        w0 = jnp.zeros(shape, dtype=dtype )
         f0 = jnp.full((dims,), 1., dtype=dtype)
         s0 = jnp.full((dims,), 1., dtype=dtype)
         b0 = jnp.full((dims,), 0., dtype=dtype)

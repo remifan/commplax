@@ -295,8 +295,14 @@ def block_metric(z, x, blocksize=20000, modformat='16QAM'):
     i = 0
     metric = []
     iscorr = []
+    ref = []
     
-    while i + blocksize < len(z):
+    while True:
+        if i >= len(z) - 1:
+            break
+        if i + blocksize > len(z):
+            blocksize = len(z) - i
+
         u = z[i: i + blocksize]
         
         m = [[is_correlated(u[:, 0], x[:, 0]), is_correlated(u[:, 0], x[:, 1])],
@@ -315,10 +321,12 @@ def block_metric(z, x, blocksize=20000, modformat='16QAM'):
         
         metric.append(comm.qamqot(u, v))
         iscorr.append(np.array(m) * 1)
+        ref.append(v)
         
         i += blocksize
         
     metric = reduce(lambda df1, df2: df1.combine(df2, lambda a, b: a + b),
                     [m.applymap(lambda x: [x]) for m in metric])
+    ref = np.concatenate(ref, axis=0)
     
-    return metric, iscorr
+    return metric, iscorr, ref
