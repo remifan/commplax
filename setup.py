@@ -29,7 +29,7 @@ setup(name='commplax',
     url='https://github.com/remifan/commplax',
     packages=find_packages(),
     install_requires=[
-        'jax>=0.2.13',
+        'jax>=0.2.13, <0.3',
         'jaxlib>=0.1.66',
         'flax>=0.3.4',
         'seaborn',
