@@ -37,8 +37,11 @@ def normpower(x, axis=0, real=False):
 
 
 def qamscale(modformat):
-    M = comm.parseqamorder(modformat)
-    return jnp.sqrt((M-1) * 2 / 3)
+    if isinstance(modformat, str):
+        M = comm.parseqamorder(modformat)
+    else:
+        M = modformat
+    return jnp.sqrt((M - 1) * 2 / 3) if comm.is_square_qam(M) else jnp.sqrt(2/3 * (M * 31/32 - 1))
 
 
 def dbp_params(
@@ -49,13 +52,13 @@ def dbp_params(
     launch_power=30,                                  # launch power [dBm]
     steps_per_span=1,                                 # steps per span
     virtual_spans=None,                               # number of virtual spans
-    carrier_frequency=299792458/1550E-9,              # carrier frequency [Hz]
-    fiber_dispersion=16.5E-6,                         # [s/m^2]
+    carrier_frequency=194.1e12,              # carrier frequency [Hz]
+    fiber_dispersion=16.7E-6,                         # [s/m^2]
     fiber_dispersion_slope=0.08e3,                    # [s/m^3]
     fiber_loss=.2E-3,                                 # loss of fiber [dB]
     fiber_core_area=80E-12,                           # effective area of fiber [m^2]
     fiber_nonlinear_index=2.6E-20,                    # nonlinear index [m^2/W]
-    fiber_reference_frequency=299792458/1550E-9,      # fiber reference frequency [Hz]
+    fiber_reference_frequency=194.1e12,      # fiber reference frequency [Hz]
     ignore_beta3=False,
     polmux=True):
 

@@ -22,6 +22,66 @@ import matplotlib.pyplot as plt
 import quantumrandom
 
 
+quasigray_32xqam = np.array([
+    -3.+5.j, -1.+5.j, -3.-5.j, -1.-5.j, -5.+3.j, -5.+1.j, -5.-3.j,
+    -5.-1.j, -1.+3.j, -1.+1.j, -1.-3.j, -1.-1.j, -3.+3.j, -3.+1.j,
+    -3.-3.j, -3.-1.j,  3.+5.j,  1.+5.j,  3.-5.j,  1.-5.j,  5.+3.j,
+    5.+1.j,  5.-3.j,  5.-1.j,  1.+3.j,  1.+1.j,  1.-3.j,  1.-1.j,
+    3.+3.j,  3.+1.j,  3.-3.j,  3.-1.j
+])
+
+
+def qammod(x, L):
+    if is_square_qam(L):
+        y = square_qam_mod(x, L)
+    else:
+        y = cross_qam_mod(x, L)
+    return y
+
+
+def qamdecision(x, L):
+    if is_square_qam(L):
+        y = square_qam_decision(x, L)
+    else:
+        y = cross_qam_decision(x, L)
+    return y
+
+
+def qamdemod(x, L):
+    if is_square_qam(L):
+        d = square_qam_demod(x, L)
+    else:
+        d = cross_qam_decision(x, L, return_int=True)
+    return d
+
+
+def cross_qam_decision(x, L, return_int=False):
+    x = np.asarray(x)
+    c = const(L)
+    idx = np.argmin(np.abs(x[:, None] - c[None, :])**2, axis=1)
+    y = c[idx]
+    return idx if return_int else y
+
+
+def is_power_of_two(n):
+    return (n != 0) and (n & (n-1) == 0)
+
+
+def is_square_qam(L):
+    return is_power_of_two(L) and int(np.log2(L)) % 2 == 0
+
+
+def is_cross_qam(L):
+    return is_power_of_two(L) and int(np.log2(L)) % 2 == 1
+
+
+def cross_qam_mod(x, L):
+    if L == 32:
+        return quasigray_32xqam[x]
+    else:
+        raise ValueError(f'Cross QAM size{L} is not implemented')
+
+
 def randpam(s, n, p=None):
     a = np.linspace(-s+1, s-1, s)
     return np.random.choice(a, n, p=p) + 1j * np.random.choice(a, n, p=p)
@@ -48,7 +108,7 @@ def graydec_int(x):
     return x
 
 
-def qamgrayenc_int(x, L):
+def square_qam_grayenc_int(x, L):
     """
     Wesel, R.D., Liu, X., Cioffi, J.M. and Komninakis, C., 2001.
     Constellation labeling for linear encoders. IEEE Transactions
@@ -62,7 +122,7 @@ def qamgrayenc_int(x, L):
     return (grayenc_int(x1) << B) + grayenc_int(x2)
 
 
-def qamgraydec_int(x, L):
+def square_qam_graydec_int(x, L):
     x = np.asarray(x, dtype=int)
     M = int(np.sqrt(L))
     B = int(np.log2(M))
@@ -81,7 +141,7 @@ def pamdecision(x, L):
     return y
 
 
-def qamdecision(x, L):
+def square_qam_decision(x, L):
     x = np.atleast_1d(x)
     M = int(np.sqrt(L))
     if any(np.iscomplex(x)):
@@ -95,22 +155,22 @@ def qamdecision(x, L):
     return y
 
 
-def qammod(x, L):
+def square_qam_mod(x, L):
     x = np.asarray(x, dtype=int)
     M = int(np.sqrt(L))
     A = np.linspace(-M+1, M-1, M, dtype=np.float64)
     C = A[None,:] + 1j*A[::-1, None]
-    d = qamgraydec_int(x, L)
+    d = square_qam_graydec_int(x, L)
     return C[d // M, d % M]
 
 
-def qamdemod(x, L):
+def square_qam_demod(x, L):
     x = np.asarray(x)
     M = int(np.sqrt(L))
-    x = qamdecision(x, L)
+    x = square_qam_decision(x, L)
     c = ((np.real(x) + M - 1) // 2).astype(int)
     r = ((M - 1 - np.imag(x)) // 2).astype(int)
-    d = qamgrayenc_int(r * M + c, L)
+    d = square_qam_grayenc_int(r * M + c, L)
     return d
 
 
@@ -128,7 +188,7 @@ def bit2int(b, M):
 
 
 def grayqamplot(L):
-    M = int(np.sqrt(L))
+    M = int(np.log2(L))
     x = range(L)
     y = qammod(x, L)
     fstr = "{:0" + str(M) + "b}"
@@ -154,10 +214,13 @@ def parseqamorder(type_str):
     return M
 
 
-def const(type_str, norm=False):
+def const(type_str=None, norm=False):
     ''' generate constellation given its natrual names '''
 
-    M = parseqamorder(type_str)
+    if isinstance(type_str, str):
+        M = parseqamorder(type_str)
+    else:
+        M = type_str
     C = qammod(range(M), M)
     if norm:
         C /= np.sqrt(2*(M-1)/3)
@@ -311,8 +374,11 @@ def gauss_kernel(n=11, sigma=1, dims=None, dtype=np.complex64):
 
 
 def qamscale(modformat):
-    M = parseqamorder(modformat)
-    return np.sqrt((M-1) * 2 / 3)
+    if isinstance(modformat, str):
+        M = parseqamorder(modformat)
+    else:
+        M = modformat
+    return np.sqrt((M - 1) * 2 / 3) if is_square_qam(M) else np.sqrt(2/3 * (M * 31/32 - 1))
 
 
 def dbp_params(
@@ -323,13 +389,13 @@ def dbp_params(
     launch_power=0,                                   # launch power [dBm]
     steps_per_span=1,                                 # steps per span
     virtual_spans=None,                               # number of virtual spans
-    carrier_frequency=299792458/1550E-9,              # carrier frequency [Hz]
-    fiber_dispersion=16.5E-6,                         # [s/m^2]
+    carrier_frequency=194.1e12,                       # carrier frequency [Hz]
+    fiber_dispersion=16.7E-6,                         # [s/m^2]
     fiber_dispersion_slope=0.08e3,                    # [s/m^3]
     fiber_loss=.2E-3,                                 # loss of fiber [dB]
     fiber_core_area=80E-12,                           # effective area of fiber [m^2]
     fiber_nonlinear_index=2.6E-20,                    # nonlinear index [m^2/W]
-    fiber_reference_frequency=299792458/1550E-9,      # fiber reference frequency [Hz]
+    fiber_reference_frequency=194.1e12,      # fiber reference frequency [Hz]
     ignore_beta3=False,
     polmux=True,
     domain='time',

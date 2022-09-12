@@ -18,16 +18,16 @@ from jax import jit, device_put, numpy as jnp
 from commplax import xop, comm, xcomm, util, adaptive_filter as af
 
 
-def tddbp(signal, sr, lp, dist, spans, taps, xi=0.6, D=16.5E-6, polmux=True, mode='SAME', backend=util.gpufirstbackend()):
+def tddbp(signal, sr, lp, dist, spans, taps, xi=0.6, D=16.7E-6, fref=194.1e12, fc=194.1e12, polmux=True, mode='SAME', backend=util.gpufirstbackend()):
     x = device_put(signal)
     return jit(_tddbp,
-               static_argnums=(4, 5, 8, 9),
-               backend=backend)(x, sr, lp, dist, spans, taps, xi, D, polmux, mode)
+               static_argnums=(4, 5, 10, 11),
+               backend=backend)(x, sr, lp, dist, spans, taps, xi, D, fref, fc, polmux, mode)
 
 
-def _tddbp(x, sr, lp, dist, spans, taps, xi, D, polmux, mode):
+def _tddbp(x, sr, lp, dist, spans, taps, xi, D, fref, fc, polmux, mode):
     x = xcomm.normpower(x)
-    _, param_D, param_N = xcomm.dbp_params(sr, dist/spans, spans, taps, fiber_dispersion=D, polmux=polmux)
+    _, param_D, param_N = xcomm.dbp_params(sr, dist/spans, spans, taps, fiber_dispersion=D, carrier_frequency=fc, fiber_reference_frequency=fref, polmux=polmux)
     return xcomm.dbp_timedomain(x, param_D,
                                 xi * 10.**(lp / 10 - 3) * param_N,
                                 mode=mode)
@@ -44,12 +44,11 @@ def cdctaps(sr, CD, fc=193.4e12, odd_taps=True):
     return mintaps
 
 
-def cdcomp(signal, sr, CD, fc=193.4e12, taps=None, polmux=True, mode='SAME', backend=None):
-    D = 16.5E-6
+def cdcomp(signal, sr, CD, D=16.7E-6, fc=193.4e12, taps=None, polmux=True, mode='SAME', backend=None):
     dist = CD / D
     if taps is None:
         taps = cdctaps(sr, CD, fc)
-    return tddbp(signal, sr, 0., dist, 1, taps, xi=0., D=D, polmux=polmux, mode=mode, backend=backend)
+    return tddbp(signal, sr, 0., dist, 1, taps, xi=0., D=D, fref=fc, fc=fc, polmux=polmux, mode=mode, backend=backend)
 
 
 def modulusmimo(signal, sps=2, taps=32, lr=2**-14, cma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
@@ -97,27 +96,64 @@ def _modulusmimo(y, R2, Rs, sps, taps, cma_samples, lr):
     return x_hat, ws, loss
 
 
-def lmsmimo(signal, truth, sps=2, taps=31,
-            lrw=1/2**6, lrf=1/2**7, lrs=0., lrb=1/2**12, beta=0.9,
+def mucmamimo(sps=2, taps=32, lr_cma=2**-14, lr_mucma=2**-13, R2=None,
+              mucma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
+
+    if const is None:
+        const = comm.const(modformat, norm=True)
+
+    if R2 is None:
+        R2 = np.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
+
+
+    def mimo(y):
+        # prepare adaptive filters
+        y = jnp.asarray(y)
+        if y.shape[0] < mucma_samples:
+            raise ValueError('cam_samples must > given samples length')
+
+        dims = y.shape[-1]
+        mucma_init, mucma_update, _ = af.mucma(R2=R2, lr=lr_mucma, dims=dims)
+        cma_init, cma_update, cma_map = af.cma(R2=R2, lr=lr_cma)
+
+        # framing signal to enable parallelization (a.k.a `jax.vmap`)
+        yf = af.frame(y, taps, sps)
+
+        # get initial weights
+        s0 = mucma_init(taps=taps, dtype=y.dtype)
+        # initialize MIMO via MU-CMA to avoid singularity
+        (w0, *_,), (ws1, loss1) = af.iterate(mucma_update, 0, s0, yf[:mucma_samples])[1]
+        # switch to RDE
+        _, (ws2, loss2) = af.iterate(cma_update, 0, w0, yf[mucma_samples:])[1]
+        loss = jnp.concatenate([loss1, loss2], axis=0)
+        ws = jnp.concatenate([ws1, ws2], axis=0)
+        x_hat = cma_map(ws, yf)
+
+        return x_hat, ws, loss
+
+    return mimo if backend is None else jit(mimo, backend=backend)
+
+
+def lmsmimo(sps=2, taps=32, train=True,
+            lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**12, beta=0.9,
             backend='cpu'):
-    return jit(_lmsmimo,
-               static_argnums=(2, 3),
-               backend=backend)(signal, truth, sps, taps, lrw, lrf, lrs, lrb, beta)
-
-
-def _lmsmimo(signal, truth, sps, taps, mu_w, mu_f, mu_s, mu_b, beta):
-    y = jnp.asarray(signal)
-    x = jnp.asarray(truth)
-    lms_init, lms_update, lms_map = af.ddlms(lr_w=mu_w,
-                                             lr_f=mu_f,
-                                             lr_s=mu_s,
-                                             lr_b=mu_b,
+    lms_init, lms_update, lms_map = af.ddlms(train=train,
+                                             lr_w=lr_w,
+                                             lr_f=lr_f,
+                                             lr_s=lr_s,
+                                             lr_b=lr_b,
                                              beta=beta)
-    yf = af.frame(y, taps, sps)
-    s0 = lms_init(taps, mimoinit='centralspike')
-    _, (ss, (loss, *_)) = af.iterate(lms_update, 0, s0, yf, x)[1]
-    xhat = lms_map(ss, yf)
-    return xhat, ss[-1], loss
+    def mimo(signal, truth):
+        y = jnp.asarray(signal)
+        x = jnp.asarray(truth)
+
+        yf = af.frame(y, taps, sps)
+        s0 = lms_init(taps, mimoinit='centralspike')
+        _, (ss, (loss, *_)) = af.iterate(lms_update, 0, s0, yf, x)[1]
+        xhat = lms_map(ss, yf)
+        return xhat, ss[-1], loss
+
+    return mimo if backend is None else jit(mimo, backend=backend)
 
 
 def rdemimo(signal, truth, lr=1/2**13, sps=2, taps=31, backend='cpu',

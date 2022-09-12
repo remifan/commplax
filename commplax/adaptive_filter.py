@@ -498,7 +498,7 @@ def ddlms(
     lr_b = cxopt.make_schedule(lr_b)
     train = cxopt.make_schedule(train)
 
-    def init(taps=31, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
+    def init(taps=32, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
         w0 = mimoinitializer(taps, dims, dtype, mimoinit)
         f0 = jnp.full((dims,), 1., dtype=dtype)
         s0 = jnp.full((dims,), 1., dtype=dtype)
