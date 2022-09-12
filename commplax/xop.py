@@ -15,7 +15,6 @@
 
 import numpy as np
 from jax import lax, jit, vmap, numpy as jnp, device_put
-from jax.ops import index, index_add, index_update
 from functools import partial
 from commplax import op
 
@@ -511,14 +510,14 @@ def frft(f, a):
     ret, done = lax.cond(
         a == 1.0,
         None,
-        lambda _: (index_update(ret, index[shft], jnp.fft.fft(f[shft]) / sN), TRUE),
+        lambda _: (ret.at[shft].set(jnp.fft.fft(f[shft]) / sN), TRUE),
         None,
         lambda _: (ret, done))
 
     ret, done = lax.cond(
         a == 3.0,
         None,
-        lambda _: (index_update(ret, index[shft], jnp.fft.ifft(f[shft]) * sN), TRUE),
+        lambda _: (ret.at[shft].set(jnp.fft.ifft(f[shft]) * sN), TRUE),
         None,
         lambda _: (ret, done))
 
@@ -526,7 +525,7 @@ def frft(f, a):
     def sincinterp(x):
         N = x.shape[0]
         y = jnp.zeros(2 * N -1, dtype=x.dtype)
-        y = index_update(y, index[:2 * N:2], x)
+        y = y.at[:2 * N:2].set(x)
         xint = convolve(
            y[:2 * N],
            jnp.sinc(jnp.arange(-(2 * N - 3), (2 * N - 2)).T / 2),
@@ -573,14 +572,14 @@ def frft(f, a):
         a, f = lax.cond(
             a > 1.5,
             None,
-            lambda _: (a - 1.0, index_update(f, index[shft], jnp.fft.fft(f[shft]) / sN)),
+            lambda _: (a - 1.0, f.at[shft].set(jnp.fft.fft(f[shft]) / sN)),
             None,
             lambda _: (a, f))
 
         a, f = lax.cond(
             a < 0.5,
             None,
-            lambda _: (a + 1.0, index_update(f, index[shft], jnp.fft.ifft(f[shft]) * sN)),
+            lambda _: (a + 1.0, f.at[shft].set(jnp.fft.ifft(f[shft]) * sN)),
             None,
             lambda _: (a, f))
 

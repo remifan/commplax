@@ -24,7 +24,7 @@ import jax.numpy as jnp
 from jax._src.util import partial, safe_zip, safe_map, unzip2
 from jax import tree_util
 from jax.tree_util import (tree_map, tree_flatten, tree_unflatten,
-                           register_pytree_node, tree_multimap)
+                           register_pytree_node)
 
 map = safe_map
 zip = safe_zip
@@ -67,9 +67,9 @@ def _iscomplex(x):
     return issubclass(x.dtype.type, jnp.complexfloating)
 def _cx2flt(c):
     # convert a complex-valued tree to a pair of real-valued trees
-    return tree_multimap(lambda *xs: tuple(xs), *tree_map(lambda x: (x.real, x.imag), c))
+    return tree_map(lambda *xs: tuple(xs), *tree_map(lambda x: (x.real, x.imag), c))
 def _flt2cx(f):
-    return tree_multimap(lambda a, b: a + 1j * b, *f)
+    return tree_map(lambda a, b: a + 1j * b, *f)
 def complex_as_realtuple(update_fn):
     def _upd(i, grad, state):
         if _iscomplex(grad):

@@ -29,7 +29,7 @@ setup(name='commplax',
     url='https://github.com/remifan/commplax',
     packages=find_packages(),
     install_requires=[
-        'jax>=0.2.13, <0.3',
+        'jax>=0.2.13',
         'jaxlib>=0.1.66',
         'flax>=0.3.4',
         'seaborn',
@@ -45,7 +45,7 @@ setup(name='commplax',
             'ipympl',
         ],
         'fs': [
-            'zarr',
+            'zarr[jupyter]==2.9.5',
             's3fs',
             'fsspec'
         ],
