@@ -541,10 +541,12 @@ def qamqot(y, x, count_dim=True, count_total=True, L=None, eval_range=(0, 0), sc
     y = shape_signal(y)
     x = shape_signal(x)
 
+    # check if scaled x is canonical
+    p = np.rint(x.real) + 1j * np.rint(x.imag)
+    if np.max(np.abs(p - x)) > 1e-2:
+        raise ValueError('the scaled x is seemly not canonical')
+
     if L is None:
-        p = np.rint(x.real) + 1j * np.rint(x.imag)
-        if np.max(np.abs(p - x)) > 1e-2:
-            raise ValueError('the scaled x is seemly not canonical')
         L = len(np.unique(p))
 
     D = y.shape[-1]
