@@ -538,13 +538,14 @@ def qamqot(y, x, count_dim=True, count_total=True, L=None, eval_range=(0, 0), sc
     y = y[eval_range[0]: y.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
     x = x[eval_range[0]: x.shape[0] + eval_range[1] if eval_range[1] <= 0 else eval_range[1]] * scale
 
-    x = x.real.astype(int) + 1j * x.imag.astype(int)
-
     y = shape_signal(y)
     x = shape_signal(x)
 
     if L is None:
-        L = len(np.unique(x))
+        p = np.rint(x.real) + 1j * np.rint(x.imag)
+        if np.max(np.abs(p - x)) > 1e-2:
+            raise ValueError('the scaled x is seemly not canonical')
+        L = len(np.unique(p))
 
     D = y.shape[-1]
 
