@@ -45,7 +45,7 @@ def n_choose_k_log2(n, k):
     ''' eval log_2 of binominal coefficient (n choose k)
         function sums up logarithm of k quotients starting from n/k downto n-k+1/1
     '''
-    I = np.arange(1, k + 1)
+    I = np.arange(k) + 1
     nck = np.log2((n - (k - I)) / I).sum()
     return nck
 
@@ -56,7 +56,7 @@ def n_choose_ks_log2(n, ks):
     assert np.sum(ks) == n
 
     ks = np.sort(ks)[:-1]
-    ns = n - np.pad(ks, [1, 0])[:len(ks)]
+    ns = n - np.pad(ks, [1, 0]).cumsum()[:len(ks)]
     out = np.sum([n_choose_k_log2(n, k) for n, k in zip(ns, ks)])
     return out
 
@@ -93,7 +93,7 @@ def CCDM(rate, freqs, num_state_bits=16):
     [2] Said, Amir. "Introduction to arithmetic coding-theory and practice."
           Hewlett Packard Laboratories Report (2004): 1057-7149.
     '''
-    assert num_state_bits < 30
+    assert num_state_bits <= 30
 
     n_bits, n_syms = rate
     c_syms = freqs.shape[0]
@@ -129,7 +129,7 @@ def CCDM(rate, freqs, num_state_bits=16):
         return bits, bi
 
     def post_shift(low, high):
-        low, high = (low  << 1) & state_mask, ((high << 1) & state_mask) | 1
+        low, high = (low << 1) & state_mask, ((high << 1) & state_mask) | 1
         return low, high
 
     def post_underflow(low, high):
@@ -154,7 +154,7 @@ def CCDM(rate, freqs, num_state_bits=16):
     def dec_shift(S):
         num_underflow, low, high, bi, bits = S
         bit = low >> (num_state_bits - 1) 
-        bit = jnp.where(low <= high, bit, bit ^ 1) # ready to terminate & flush bits
+        bit = jnp.where(low <= high, bit, 1) # ready to terminate & flush bits
         bits, bi = write_bits(bits, bi, bit)
         
         # Write out the saved underflow bits
