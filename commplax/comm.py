@@ -483,6 +483,42 @@ def finddelay(x, y):
     return d
 
 
+def iqdelay(data, fs, delay):
+    # Apply a <delay> to an input vector <data> with samplerate <fs>.
+    # <delay> is given in seconds (does not have to be multiple of the
+    # sample interval). 
+    # If data is complex, keeps the imaginary part unchanged.
+    
+    # determine number of samples
+    n = len(data);
+    # the algorithm works only for even number of samples
+    if n % 2 != 0:
+        n = 2 * n
+        data = np.tile(data, 2)
+        dflag = 1
+    else:
+        dflag = 0
+    
+    # convert to frequency domain
+    fdata = np.fft.fftshift(np.fft.fft(np.real(data))) / n
+    # create linear phase vector (= delay)
+    phd = np.arange(-n/2, n/2)/n * 2 * np.pi * (delay * fs)
+    # convert it into frequency domain
+    fdelay = np.exp(1j * (-phd))
+    # apply delay (convolution ~ multiplication)
+    fresult = fdata * fdelay
+    # ...and convert back into time domain
+    result = np.real(np.fft.ifft(np.fft.fftshift(fresult))) * n
+    # get imaginary part from input vector
+    if ~np.isreal(data).all():
+        result = result + 1j * np.imag(data)
+
+    if dflag:
+        result = result[1:n//2]
+
+    return result
+
+
 def align_periodic(y, x, begin=0, last=2000, b=0.5):
 
     dims = x.shape[-1]
