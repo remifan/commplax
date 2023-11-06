@@ -20,7 +20,7 @@ class ConvTest(jtu.JaxTestCase):
         mode=['same', 'valid', 'full'],
         dtype=jtu.dtypes.inexact,
     )
-    def testConvolveFloat(self, s, n, m, mode, dtype):
+    def testConvolve(self, s, n, m, mode, dtype):
         x, h = conv_input(s, n, m, dtype)
         a = np.convolve(x, h, mode=mode)
         b = xop.convolve(x, h, mode=mode)

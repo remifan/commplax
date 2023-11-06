@@ -279,9 +279,9 @@ def cma(
 
     References:
       - [1] D. Godard, “Self-recovering equalization and carrier tracking in two-dimensional data
-        communication systems,” IEEE Trans. Commun., vol. 28, no. 11, pp. 1867–1875, Nov. 1980.
+        communication systems,” IEEE Trans. Commun., vol. 28, no. 11, pp. 1867-1875, Nov. 1980.
       - [2] K. Kikuchi, “Polarization-demultiplexing algorithm in the digital coherent receiver,”
-        in Proc. Digest 2008 IEEE/LEOS Summer Topical Meetings, Jul., pp. 101–102.
+        in Proc. Digest 2008 IEEE/LEOS Summer Topical Meetings, Jul., pp. 101-102.
     """
     lr = cxopt.make_schedule(lr)
 
