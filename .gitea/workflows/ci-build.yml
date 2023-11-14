@@ -41,7 +41,7 @@ jobs:
           pip install -e '.[test]' 
       - name: Test with pytest
         run: |
-          pytest -n auto --tb=short --maxfail=20 tests --doctest-modules --junitxml=junit/test-results-${{ matrix.python-version }}.xml --cov=. --cov-report=xml --cov-report=html
+          pytest tests --doctest-modules --junitxml=junit/test-results-${{ matrix.python-version }}.xml --cov=. --cov-report=xml --cov-report=html
       - name: Upload pytest test results
         uses: actions/upload-artifact@v3
         with:
