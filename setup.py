@@ -52,7 +52,7 @@ setup(name='commplax',
         'test': [
             'pytest',
             'pytest-cov'
-        ]
+        ],
         'all': [
             'zarr[jupyter]==2.9.5',
             's3fs',
