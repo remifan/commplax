@@ -21,7 +21,10 @@ jobs:
       matrix:
         python-version: ["3.11"]
     steps:
-      - run: curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
+      - name: setup Node
+        run: |
+        apt install curl
+        curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
       - uses: actions/checkout@v3
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
