@@ -16,8 +16,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-20.04
-    # env:
-    #   RUNNER_TOOL_CACHE: /toolcache
     strategy:
       matrix:
         python-version: ["3.11"]
