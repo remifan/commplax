@@ -23,7 +23,7 @@ jobs:
     steps:
       - name: setup Node
         run: |
-          apt update && apt install nodejs git -y
+          apt update && apt install lsb-release git nodejs -y
       - uses: actions/checkout@v3
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
