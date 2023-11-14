@@ -34,5 +34,4 @@ jobs:
           pip install --upgrade "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
       - name: Test jax-gpu
         run: |
-          nvidia-smi
           python -c 'from jax.lib import xla_bridge; print(xla_bridge.get_backend().platform)'
