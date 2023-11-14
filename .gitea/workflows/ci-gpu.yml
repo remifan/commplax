@@ -23,7 +23,7 @@ jobs:
     steps:
       - name: setup Node
         run: |
-          nvidia-smi
+          /usr/bin/nvidia-smi
           apt update && apt install lsb-release zstd git nodejs -y
       - uses: actions/checkout@v3
       - name: Set up Python ${{ matrix.python-version }}
