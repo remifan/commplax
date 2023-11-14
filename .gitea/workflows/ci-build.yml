@@ -1,6 +1,6 @@
 name: CI
 run-name: ${{ gitea.actor }} is building CI
-# on: workflow_dispatch
+
 on:
   push:
     branches:
