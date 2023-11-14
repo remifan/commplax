@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04:host
+    runs-on: ubuntu-22.04
     container:
       image: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
     strategy:
