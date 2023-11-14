@@ -33,7 +33,7 @@ setup(name='commplax',
         'jaxlib>=0.1.66',
         'flax>=0.3.4',
         'seaborn',
-        'quantumrandom'
+        'quantumrandom',
     ],
     extras_require={
         'dev': [
@@ -49,6 +49,10 @@ setup(name='commplax',
             's3fs',
             'fsspec'
         ],
+        'test': [
+            'pytest',
+            'pytest-cov'
+        ]
         'all': [
             'zarr[jupyter]==2.9.5',
             's3fs',
