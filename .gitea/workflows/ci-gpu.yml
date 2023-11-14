@@ -23,7 +23,7 @@ jobs:
     steps:
       - name: setup Node
         run: |
-          apt update && apt install curl
+          apt update && apt install curl -y
           curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
       - uses: actions/checkout@v3
       - name: Set up Python ${{ matrix.python-version }}
