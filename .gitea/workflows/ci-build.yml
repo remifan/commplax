@@ -1,13 +1,13 @@
 name: CI
 run-name: ${{ gitea.actor }} is building CI
-# on: workflow_dispatch
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+on: workflow_dispatch
+# on:
+#   push:
+#     branches:
+#       - main
+#   pull_request:
+#     branches:
+#       - main
 
 permissions:
   contents: read  # to fetch code
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04
     strategy:
       matrix:
         python-version: ["3.11"]
