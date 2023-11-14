@@ -1,13 +1,13 @@
 name: CI
 run-name: ${{ gitea.actor }} is building CI
-on: workflow_dispatch
-# on:
-#   push:
-#     branches:
-#       - main
-#   pull_request:
-#     branches:
-#       - main
+# on: workflow_dispatch
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read  # to fetch code
@@ -16,6 +16,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-20.04
+    env:
+      RUNNER_TOOL_CACHE: /toolcache
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -25,22 +27,27 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
-          cache-dependency-path: setup.py
-        env:
-          AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
+      - name: Get pip cache dir
+        id: pip-cache
+        run: |
+          python -m pip install --upgrade pip wheel
+          echo "dir=$(pip cache dir)" >> $GITHUB_OUTPUT
+      - name: pip cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ steps.pip-cache.outputs.dir }}
+          key: ${{ runner.os }}-py${{ matrix.python-version }}-pip-${{ hashFiles('**/setup.py', '**/requirements.txt', '**/test-requirements.txt') }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e '.' 
-      - name: Test with pytest
-        run: |
-          pip install pytest pytest-cov 
-          pytest tests --doctest-modules --junitxml=junit/test-results-${{ matrix.python-version }}.xml --cov=. --cov-report=xml --cov-report=html
-      - name: Upload pytest test results
-        uses: actions/upload-artifact@v3
-        with:
-          name: pytest-results-${{ matrix.python-version }}.xml
-          path: junit/test-results-${{ matrix.python-version }}.xml
-        # Use always() to always run this step to publish test results when there are test failures
-        if: ${{ always() }}
+          pip install -e '.[test]' 
+      # - name: Test with pytest
+      #   run: |
+      #     pytest -n auto --tb=short --maxfail=20 tests --doctest-modules --junitxml=junit/test-results-${{ matrix.python-version }}.xml --cov=. --cov-report=xml --cov-report=html
+      # - name: Upload pytest test results
+      #   uses: actions/upload-artifact@v3
+      #   with:
+      #     name: pytest-results-${{ matrix.python-version }}.xml
+      #     path: junit/test-results-${{ matrix.python-version }}.xml
+      #   # Use always() to always run this step to publish test results when there are test failures
+      #   if: ${{ always() }}
