@@ -19,12 +19,10 @@ jobs:
       matrix:
         python-version: ["3.11"]
     steps:
-      - name: Setup Cuda-11.6
-        uses: Jimver/cuda-toolkit@v0.2.11
+      - uses: Jimver/cuda-toolkit@v0.2.11
         id: cuda-toolkit
         with:
           cuda: '11.6.2'
-        run: nvidia-smi
       - uses: actions/checkout@v3
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
