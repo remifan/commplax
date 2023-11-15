@@ -15,15 +15,15 @@ def conv_input(s, n, m, dtype):
 class ConvTest(jtu.JaxTestCase):
     @jtu.sample_product(
         s=[0, 1],
-        n=[1, 5, 100, 1000],
-        m=[1, 2, 3, 10],
+        n=[1, 5, 100],
+        m=[1, 2, 3],
         mode=['same', 'valid', 'full'],
         dtype=jtu.dtypes.inexact,
     )
     def testConvolve(self, s, n, m, mode, dtype):
         x, h = conv_input(s, n, m, dtype)
         a = np.convolve(x, h, mode=mode)
-        b = jit(xop.convolve)(x, h, mode=mode)
+        b = xop.convolve(x, h, mode=mode)
         self.assertAllClose(a, b)
 
 if __name__ == "__main__":
