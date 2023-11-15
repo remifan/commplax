@@ -22,3 +22,4 @@ jobs:
     steps:
       - name: Check Cuda
         run: nvidia-smi
+      - uses: actions/checkout@v3
