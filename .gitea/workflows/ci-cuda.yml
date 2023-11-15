@@ -42,8 +42,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install --upgrade "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
       - name: test Jax-GPU
-        run: python -c 'from jax.lib import xla_bridge; print(xla_bridge.get_backend().platform)'
-        run: python -c 'import jax; print(jax.jit(jax.numpy.fft.fft)(jax.numpy.arange(10)))'
+        run: |
+          python -c 'from jax.lib import xla_bridge; print(xla_bridge.get_backend().platform)'
+          python -c 'import jax; print(jax.jit(jax.numpy.fft.fft)(jax.numpy.arange(10)))'
       - name: Install rest dependencies
         run: |
           pip install -e '.[test]' 
