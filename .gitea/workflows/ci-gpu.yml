@@ -1,0 +1,24 @@
+name: CI
+run-name: ${{ gitea.actor }} is building CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read  # to fetch code
+  actions: write  # to cancel previous workflows
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04-gpu
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    steps:
+      - name: Check Cuda
+        run: nvidia-smi
