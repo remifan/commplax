@@ -40,7 +40,7 @@ jobs:
       - name: Install Jax-GPU
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade "jax[cuda11_local]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+          pip install --upgrade "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
       - name: test Jax-GPU
         run: python -c 'from jax.lib import xla_bridge; print(xla_bridge.get_backend().platform)'
       - name: Install rest dependencies
