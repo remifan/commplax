@@ -25,6 +25,10 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
+      - uses: Jimver/cuda-toolkit@v0.2.11
+        id: cuda-toolkit
+        with:
+          cuda: '11.8.0'
       - name: Get pip cache dir
         id: pip-cache
         run: |
