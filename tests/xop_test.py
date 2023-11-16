@@ -15,8 +15,8 @@ def conv_input(s, n, m, dtype):
 class ConvTest(jtu.JaxTestCase):
     @jtu.sample_product(
         s=[0, 1],
-        n=[1, 5, 100],
-        m=[1, 2, 3],
+        n=[1, 5, 100, 1000],
+        m=[1, 2, 3, 10],
         mode=['same', 'valid', 'full'],
         dtype=jtu.dtypes.inexact,
     )
