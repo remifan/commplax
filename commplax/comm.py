@@ -88,7 +88,7 @@ def randpam(s, n, p=None):
 
 
 def randqam(s, n, p=None):
-    m = np.int(np.sqrt(s))
+    m = int(np.sqrt(s))
     a = np.linspace(-m+1, m-1, m, dtype=np.float64)
     return np.random.choice(a, n, p=p) + 1j * np.random.choice(a, n, p=p)
 
@@ -175,7 +175,7 @@ def square_qam_demod(x, L):
 
 
 def int2bit(d, M):
-    M = np.asarray(M, dtype=np.int)
+    M = np.asarray(M, dtype=int)
     d = np.atleast_1d(d).astype(np.uint8)
     b = np.unpackbits(d[:,None], axis=1)[:,-M:]
     return b
@@ -579,7 +579,7 @@ def qamqot(y, x, count_dim=True, count_total=True, L=None, eval_range=(0, 0), sc
 
     # check if scaled x is canonical
     p = np.rint(x.real) + 1j * np.rint(x.imag)
-    if np.max(np.abs(p - x)) > 1e-2:
+    if np.max(np.abs(p - x)) > 5e-1:
         raise ValueError('the scaled x is seemly not canonical')
 
     if L is None:
@@ -590,21 +590,26 @@ def qamqot(y, x, count_dim=True, count_total=True, L=None, eval_range=(0, 0), sc
     z = [(a, b) for a, b in zip(y.T, x.T)]
 
     SNR_fn = lambda y, x: 10. * np.log10(getpower(x, False) / getpower(x - y, False))
+    SNRdB2EVM = lambda x: 1 / np.sqrt(np.power(10, x/10))
 
     def f(z):
         y, x = z
 
         M = np.sqrt(L)
 
-        by = int2bit(qamdemod(y, L), M).ravel()
-        bx = int2bit(qamdemod(x, L), M).ravel()
+        sy = qamdemod(y, L)
+        sx = qamdemod(x, L)
+        by = int2bit(sy, M).ravel()
+        bx = int2bit(sx, M).ravel()
 
         BER = np.count_nonzero(by - bx) / len(by)
+        SER = np.count_nonzero(sy - sx) / len(sy)
         with np.errstate(divide='ignore'):
             QSq = 20 * np.log10(np.sqrt(2) * np.maximum(special.erfcinv(2 * BER), 0.))
         SNR = SNR_fn(y, x)
+        EVM = SNRdB2EVM(SNR)
 
-        return BER, QSq, SNR
+        return SER, BER, QSq, SNR, EVM
 
     qot = []
     ind = []
@@ -619,7 +624,7 @@ def qamqot(y, x, count_dim=True, count_total=True, L=None, eval_range=(0, 0), sc
         ind += ['total']
 
     if len(qot) > 0:
-        df = pd.DataFrame(qot, columns=['BER', 'QSq', 'SNR'], index=ind)
+        df = pd.DataFrame(qot, columns=['SER', 'BER', 'QSq', 'SNR', 'EVM'], index=ind)
 
     return df
 
@@ -643,7 +648,10 @@ def qamqot_local(y, x, frame_size=10000, L=None, scale=1, eval_range=None):
 
     qot_local_ip = np.repeat(qot_local, frame_size, axis=0) # better interp method?
 
-    return {'BER': qot_local_ip[...,0], 'QSq': qot_local_ip[...,1], 'SNR': qot_local_ip[...,2]}
+    metric_keys = ['SER', 'BER', 'QSq', 'SNR', 'EVM']
+    metric_vals = [qot_local_ip[..., i] for i in range(len(metric_keys))]
+
+    return { k:v for k, v in zip(metric_keys, metric_vals) }
 
 
 def corr_local(y, x, frame_size=10000, L=None):

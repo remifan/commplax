@@ -14,6 +14,7 @@
 
 
 import numpy as np
+from functools import partial
 from jax import jit, device_put, numpy as jnp
 from commplax import xop, comm, xcomm, util, adaptive_filter as af
 
@@ -95,16 +96,23 @@ def _modulusmimo(y, R2, Rs, sps, taps, cma_samples, lr):
 
     return x_hat, ws, loss
 
-
-def mucmamimo(sps=2, taps=32, lr_cma=2**-14, lr_mucma=2**-13, R2=None,
-              mucma_samples=20000, modformat='16QAM', const=None, backend='cpu'):
+def mucmamimo(
+    sps=2,
+    taps=32,
+    lr_mucma=2**-13,
+    lr_cma=2**-14,
+    R2=None,
+    mucma_samples=20000,
+    modformat='16QAM',
+    const=None,
+    keep_sps=True,
+    backend='cpu'):
 
     if const is None:
         const = comm.const(modformat, norm=True)
 
     if R2 is None:
         R2 = np.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
-
 
     def mimo(y):
         # prepare adaptive filters
@@ -122,12 +130,19 @@ def mucmamimo(sps=2, taps=32, lr_cma=2**-14, lr_mucma=2**-13, R2=None,
         # get initial weights
         s0 = mucma_init(taps=taps, dtype=y.dtype)
         # initialize MIMO via MU-CMA to avoid singularity
-        (w0, *_,), (ws1, loss1) = af.iterate(mucma_update, 0, s0, yf[:mucma_samples])[1]
-        # switch to RDE
-        _, (ws2, loss2) = af.iterate(cma_update, 0, w0, yf[mucma_samples:])[1]
+        (w0, *_), (ws1, loss1) = af.iterate(mucma_update, s0, yf[:mucma_samples])
+        # switch to vanilla CMA by resuing the MU-CMA's weights
+        ws2, loss2 = af.iterate(cma_update, w0, yf[mucma_samples:])[1]
+        # concatenate MU-CMA and CMA's weights and losses
         loss = jnp.concatenate([loss1, loss2], axis=0)
         ws = jnp.concatenate([ws1, ws2], axis=0)
-        x_hat = cma_map(ws, yf)
+        # apply weights to generate final results
+        if keep_sps:
+            yf = af.frame(y, taps, 1)
+            ws = jnp.repeat(ws, sps, axis=0)
+            x_hat = cma_map(ws, yf)
+        else:
+            x_hat = cma_map(ws, yf)
 
         return x_hat, ws, loss
 
@@ -136,22 +151,28 @@ def mucmamimo(sps=2, taps=32, lr_cma=2**-14, lr_mucma=2**-13, R2=None,
 
 def lmsmimo(sps=2, taps=32, train=True,
             lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**12, beta=0.9,
-            backend='cpu'):
+            const=comm.const('16QAM', norm=True), backend='cpu'):
     lms_init, lms_update, lms_map = af.ddlms(train=train,
+                                             const=const,
                                              lr_w=lr_w,
                                              lr_f=lr_f,
                                              lr_s=lr_s,
                                              lr_b=lr_b,
                                              beta=beta)
-    def mimo(signal, truth):
-        y = jnp.asarray(signal)
-        x = jnp.asarray(truth)
+    if not np.isscalar(taps):
+        ntaps = taps.shape[-1]
+    else:
+        ntaps = taps
 
-        yf = af.frame(y, taps, sps)
-        s0 = lms_init(taps, mimoinit='centralspike')
-        _, (ss, (loss, *_)) = af.iterate(lms_update, 0, s0, yf, x)[1]
+    def mimo(signal, truth=None):
+        y = jnp.asarray(signal)
+        x = jnp.asarray(truth) if train else jnp.zeros_like(signal)
+
+        yf = af.frame(y, ntaps, sps)
+        s0 = lms_init(taps, dims=y.shape[1], dtype=y.dtype, mimoinit='centralspike')
+        ss, (loss, *_) = af.iterate(lms_update, s0, yf, x)[1]
         xhat = lms_map(ss, yf)
-        return xhat, ss[-1], loss
+        return xhat, ss[0], loss
 
     return mimo if backend is None else jit(mimo, backend=backend)
 
@@ -220,20 +241,20 @@ def _framekfcpr(y, x, n, w0, const):
     return xhat, (fo, phi)
 
 
-def ekfcpr(signal, truth=None, modformat='16QAM', const=None, backend='cpu'):
+def ekfcpr(signal, truth=None, modformat='16QAM', const=None, beta=0.6, backend='cpu'):
     y = jnp.asarray(signal)
     x = jnp.asarray(truth) if truth is not None else truth
     if const is None:
         const=comm.const(modformat, norm=True)
     const = jnp.asarray(const)
-    return jit(_ekfcpr, backend=backend)(y, x, const)
+    return jit(partial(_ekfcpr, beta=beta), backend=backend)(y, x, const)
 
 
-def _ekfcpr(y, x, const):
+def _ekfcpr(y, x, const, beta):
     dims = y.shape[-1]
-    cpr_init, cpr_update, cpr_map = af.array(af.cpane_ekf, dims)(beta=0.6, const=const)
+    cpr_init, cpr_update, cpr_map = af.array(af.cpane_ekf, dims)(beta=beta, const=const)
     cpr_state = cpr_init()
-    _, (phi, _) = af.iterate(cpr_update, 0, cpr_state, y, x)[1]
+    phi, _ = af.iterate(cpr_update, cpr_state, y, x)[1]
     xhat = cpr_map(phi, y)
     return xhat, phi
 

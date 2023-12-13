@@ -40,7 +40,7 @@ def glance(x):
 
 def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None, dpi=100):
     signal = np.atleast_1d(signal)
-    if not np.iscomplex(signal).any():
+    if not np.iscomplex(signal).all():
         raise ValueError(f'expect complex input, got {signal.dtype} instead')
       
     if signal.ndim == 1:

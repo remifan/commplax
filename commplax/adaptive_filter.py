@@ -18,7 +18,7 @@ import functools
 import numpy as np
 from typing import Any, Callable, NamedTuple, Optional, Tuple, Union
 from functools import partial
-from jax import numpy as jnp
+from jax import numpy as jnp, vmap, jit
 from commplax import comm, xcomm, xop, cxopt
 from jax.tree_util import tree_flatten, tree_unflatten
 from jax.lax import stop_gradient
@@ -105,6 +105,14 @@ def array(af_maker, replicas, axis=-1):
     return rep_af_maker
 
 
+def dtype_to_real(rvs_dtype):
+    return rvs_dtype.type(0).real.dtype
+
+
+def dtype_to_complex(rvs_dtype):
+    return (1j * rvs_dtype.type(0)).dtype
+
+
 def frame(y, taps, sps, rtap=None):
     y_pad = jnp.pad(y, mimozerodelaypads(taps=taps, sps=sps, rtap=rtap))
     yf = jnp.array(xop.frame(y_pad, taps, sps))
@@ -112,19 +120,22 @@ def frame(y, taps, sps, rtap=None):
 
 
 def iterate(update: UpdateFn,
-            step0: Step,
             state: AFState,
             signal: Signal,
             truth=None,
             truth_ndim=2,
+            step0: Step=None,
             device=None):
-    steps = step0 + jnp.arange(signal.shape[0])
+    _step0 = 0 if step0 is None else step0
+    steps = _step0 + jnp.arange(signal.shape[0])
     # pad dummy truth
     truth = jnp.zeros((0, *signal.shape[1 - truth_ndim:]), dtype=signal.dtype) if truth is None else truth[:signal.shape[0]]
     padw_data_axes = ((0, 0),) * (truth_ndim - 1)
     truth = jnp.pad(truth, ((0, signal.shape[0] - truth.shape[0]), *padw_data_axes))
     xs = (steps, signal, truth)
-    return steps[-1], xop.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs, jit_device=device)
+    res = xop.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs, jit_device=device)
+    out = res if step0 is None else (steps[-1], res)
+    return out
 
 
 def mimo(w, u):
@@ -134,21 +145,15 @@ def mimo(w, u):
 def r2c(r):
     ''' Pack real-valued signal into complex-valued signal
     for example, converting
-    [[ 0.  0.  1. -1.]
-     [ 2. -2.  3. -3.]
-     [ 4. -4.  5. -5.]
-     [ 6. -6.  7. -7.]]
+    [0.  0.  1. -1.]
     to
-    [[0.+0.j 1.-1.j]
-     [2.-2.j 3.-3.j]
-     [4.-4.j 5.-5.j]
-     [6.-6.j 7.-7.j]]
+    [0.+ 0.j 1.-1.j]
     '''
     if not jnp.iscomplexobj(r):
-        if r.ndim != 2:
+        if r.ndim != 1:
             raise ValueError('invalid ndim, expected 2 but got %d' % r.ndim)
-        r = r.reshape((r.shape[0], r.shape[-1] // 2, -1))
-        c = r[..., 0] + 1j * r[..., 1]
+        I = np.arange(r.shape[0]//2) * 2
+        c  = r[I] + 1j*r[I+1]
     else:
         c = r
     return c
@@ -157,24 +162,36 @@ def r2c(r):
 def c2r(c):
     ''' Unpack complex-valued signal into real-valued signal
     for example, converting
-    [[0.+0.j 1.-1.j]
-     [2.-2.j 3.-3.j]
-     [4.-4.j 5.-5.j]
-     [6.-6.j 7.-7.j]]
+    [0.+0.j 1.-1.j]
     to
-    [[ 0.  0.  1. -1.]
-     [ 2. -2.  3. -3.]
-     [ 4. -4.  5. -5.]
-     [ 6. -6.  7. -7.]]
+    [ 0. 0. 1. -1.]
     '''
     if jnp.iscomplexobj(c):
-        if c.ndim != 2:
+        if c.ndim != 1:
             raise ValueError('invalid ndim, expected 2 but got %d' % c.ndim)
-        r = jnp.stack([c.real, c.imag], axis=-1).reshape((c.shape[0], -1))
+        dims = c.shape[0]
+        r = jnp.empty(shape=(dims * 2,), dtype=dtype_to_real(c.dtype))
+        I = np.arange(dims)
+        r = r.at[I*2+0].set(c.real)
+        r = r.at[I*2+1].set(c.imag)
     else:
         r = c
     return r
 
+
+def c2r_mimo_weights(wc):
+    dims, taps = wc.shape[0], wc.shape[2]
+    wr = jnp.empty(shape=(dims * 2, dims * 2, taps), dtype=dtype_to_real(wc.dtype))
+    I = np.arange(dims)
+    wr = wr.at[*np.meshgrid(I*2+0, I*2+0, indexing='ij'), :].set( wc.real)
+    wr = wr.at[*np.meshgrid(I*2+0, I*2+1, indexing='ij'), :].set(-wc.imag)
+    wr = wr.at[*np.meshgrid(I*2+1, I*2+0, indexing='ij'), :].set( wc.imag)
+    wr = wr.at[*np.meshgrid(I*2+1, I*2+1, indexing='ij'), :].set( wc.real)
+    return wr
+
+vc2r = vmap(c2r)
+vr2c = vmap(r2c)
+vmimo = vmap(mimo)
 
 def filterzerodelaypads(taps, stride=1, rtap=None):
     if rtap is None:
@@ -189,16 +206,19 @@ def mimozerodelaypads(taps, sps=2, rtap=None):
 
 
 def mimoinitializer(taps, dims, dtype, initkind):
-    initkind = initkind.lower()
-    if initkind == 'zeros':
-        w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
-    elif initkind == 'centralspike':
-        w0 = np.zeros((dims, dims, taps), dtype=dtype)
-        ctap = (taps + 1) // 2 - 1
-        w0[np.arange(dims), np.arange(dims), ctap] = 1.
-        w0 = jnp.array(w0)
+    if np.isscalar(taps):
+        initkind = initkind.lower()
+        if initkind == 'zeros':
+            w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
+        elif initkind == 'centralspike':
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+            w0 = jnp.array(w0)
+        else:
+            raise ValueError('invalid initkind %s' % initkind)
     else:
-        raise ValueError('invalid initkind %s' % initkind)
+        w0 = jnp.asarray(taps, dtype=dtype)
     return w0
 
 
@@ -239,7 +259,7 @@ def lms(
         return w0.astype(dtype)
 
     def loss_fn(w, u):
-        v = r2c(mimo(w, u)[None, :])[0, :]
+        v = r2c(mimo(w, u))
         d = decision(const, v)
         loss = jnp.sum(jnp.abs(d - v)**2)
         return loss
@@ -251,7 +271,7 @@ def lms(
         return w, out
 
     def apply(ws, yf):
-        return jax.vmap(mimo)(ws, yf)
+        return vmimo(ws, yf)
 
     return AdaptiveFilter(init, update, apply)
 
@@ -296,7 +316,7 @@ def cma(
         return w0.astype(dtype)
 
     def loss_fn(w, u):
-        v = r2c(mimo(w, u)[None, :])[0, :]
+        v = r2c(mimo(w, u))
         loss = jnp.sum(jnp.abs(R2 - jnp.abs(v)**2))
         return loss
 
@@ -307,7 +327,7 @@ def cma(
         return w, out
 
     def apply(ws, yf):
-        return jax.vmap(mimo)(ws, yf)
+        return vmimo(ws, yf)
 
     return AdaptiveFilter(init, update, apply)
 
@@ -359,7 +379,7 @@ def mucma(
 
     def update(i, state, u):
         w, z, r, betapow = state
-        z = jnp.concatenate((r2c(mimo(w, u)[None, :]), z[:-1,:]))
+        z = jnp.concatenate((mimo(w, u)[None, :], z[:-1, :])) #TODO: c2r?
         z0 = jnp.repeat(z, dims, axis=-1)
         z1 = jnp.tile(z, (1, dims))
         rt = jax.vmap(lambda a, b: a[0] * b.conj(), in_axes=-1, out_axes=0)(z0, z1).reshape(r.shape)
@@ -388,7 +408,7 @@ def mucma(
         return state, out
 
     def apply(ws, yf):
-        return jax.vmap(mimo)(ws, yf)
+        return vmimo(ws, yf)
 
     return AdaptiveFilter(init, update, apply)
 
@@ -397,7 +417,7 @@ def mucma(
 def rde(
     lr: Union[float, Schedule] = 2**-15,
     train: Union[bool, Schedule] = False,
-    Rs: Array = jnp.unique(jnp.abs(comm.const("16QAM", norm=True))),
+    Rs: Array = np.unique(np.abs(comm.const("16QAM", norm=True))),
     const: Optional[Array] = None
 ) -> AdaptiveFilter:
     """Radius Directed adaptive Equalizer
@@ -422,6 +442,8 @@ def rde(
 
     if const is not None:
         Rs = jnp.array(jnp.unique(jnp.abs(const)))
+    else:
+        Rs = jnp.array(Rs)
 
     def init(dims=2, w0=None, taps=32, dtype=np.complex64):
         if w0 is None:
@@ -431,7 +453,7 @@ def rde(
         return w0
 
     def loss_fn(w, u, x, i):
-        v = r2c(mimo(w, u)[None,:])
+        v = r2c(mimo(w, u))[None,:]
         R2 = jnp.where(train(i),
                        jnp.abs(x)**2,
                        Rs[jnp.argmin(
@@ -448,17 +470,17 @@ def rde(
         return w, out
 
     def apply(ws, yf):
-        return jax.vmap(mimo)(ws, yf)
+        return vmimo(ws, yf)
 
     return AdaptiveFilter(init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)
 def ddlms(
-    lr_w: Union[float, Schedule] = 1/2**6,
+    lr_w: Union[float, Schedule] = 1/2**4,
     lr_f: Union[float, Schedule] = 1/2**7,
     lr_s: Union[float, Schedule] = 0.,
-    lr_b: Union[float, Schedule] = 1/2**11,
+    lr_b: Union[float, Schedule] = 1/2**7,
     train: Union[bool, Schedule] = False,
     grad_max: Tuple[float, float] = (30., 30.),
     eps: float = 1e-8,
@@ -500,32 +522,33 @@ def ddlms(
 
     def init(taps=32, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
         w0 = mimoinitializer(taps, dims, dtype, mimoinit)
-        f0 = jnp.full((dims,), 1., dtype=dtype)
-        s0 = jnp.full((dims,), 1., dtype=dtype)
-        b0 = jnp.full((dims,), 0., dtype=dtype)
-        fshat0 = jnp.full((dims,), 1., dtype=dtype)
+        cplx_type = jnp.complex64 #TODO make this inference
+        f0 = jnp.full((2,), 1., dtype=cplx_type)
+        s0 = jnp.full((2,), 1., dtype=cplx_type)
+        b0 = jnp.full((2,), 0., dtype=cplx_type)
+        fshat0 = jnp.full((2,), 1., dtype=cplx_type)
         return (w0, f0, s0, b0, fshat0)
 
     def update(i, state, inp):
         w, f, s, b, fshat = state
         u, x = inp
 
-        v = mimo(w, u)
-        # v = r2c(mimo(w, u)[None, :])[0, :]
+        v = r2c(mimo(w, u))
         k = v * f
         c = k * s
         z = c + b
         q = v * fshat + b
-        d = jnp.where(train(i), x, decision(const, q))
+        d = jnp.where(train(i), r2c(x), decision(const, q))
         l = jnp.sum(jnp.abs(z - d)**2)
 
         psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
         e_w = (d - b) * psi_hat - v
+        e_w = c2r(e_w) if not jnp.iscomplexobj(w) else e_w
         e_f = d - b - k
         e_s = d - b - c
         e_b = d - z
         gw = -1. / ((jnp.abs(u)**2).sum() + eps) * e_w[:, None, None] * u.conj().T[None, ...]
-        # gw = -e_w[:, None, None] * u.conj().T[None, ...]
+
         gf = -1. / (jnp.abs(v)**2 + eps) * e_f * v.conj()
         gs = -1. / (jnp.abs(k)**2 + eps) * e_s * k.conj()
         gb = -e_b
@@ -550,7 +573,8 @@ def ddlms(
 
     def apply(ps, yf):
         ws, fs, ss, bs = ps
-        return jax.vmap(mimo)(ws, yf) * fs * ss + bs
+        res = vr2c(vmimo(ws, yf)) * fs * ss + bs
+        return vc2r(res) if not jnp.iscomplexobj(yf) else res
 
     return AdaptiveFilter(init, update, apply)
 
