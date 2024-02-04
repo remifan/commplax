@@ -235,7 +235,7 @@ def _framekfcpr(y, x, n, w0, const):
     if w0 is None:
         w0 = xcomm.foe_mpowfftmax(y[:5000])[0].mean()
     cpr_state = cpr_init(w0=w0)
-    _, (fo, phif) = af.iterate(cpr_update, 0, cpr_state, yf, xf, truth_ndim=3)[1]
+    _, (fo, phif) = af.iterate(cpr_update, cpr_state, yf, xf, truth_ndim=3)
     xhat = cpr_map(phif, yf).reshape((-1, dims))
     phi = phif.reshape((-1, dims))
     return xhat, (fo, phi)

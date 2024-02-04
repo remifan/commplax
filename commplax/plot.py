@@ -17,6 +17,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import signal
+from scipy.cluster.vq import kmeans
 
 
 def glance(x):
@@ -38,10 +39,17 @@ def glance(x):
         waveform(x[:,ch], axes=[asp(gs[1, ch]), asp(gs[2, ch])])
 
 
-def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None, dpi=100):
+def _const_optim(x, c):
+    u = np.stack([x.real, x.imag], axis=-1)
+    v = np.stack([c.real, c.imag], axis=-1)
+    codebook, distortion = kmeans(u, v, iter=50, thresh=1e-08)
+    const = codebook[:, 0] + 1j*codebook[:, 1]
+    return const
+
+def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None, const=None, dpi=100):
     signal = np.atleast_1d(signal)
-    if not np.iscomplex(signal).all():
-        raise ValueError(f'expect complex input, got {signal.dtype} instead')
+    # if not np.iscomplex(signal).all():
+    #     raise ValueError(f'expect complex input, got {signal.dtype} instead')
       
     if signal.ndim == 1:
       signal = signal[:, None]
@@ -64,6 +72,11 @@ def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None
             ax = sns.kdeplot(x=I, y=Q, ax=ax, **kdeopts)
         else:
             ax.scatter(I, Q, s=1)
+            if const is not None:
+                ax.scatter(const.real, const.imag, marker='x', color='red')
+                const_kmeans = _const_optim(x, const)
+                ax.scatter(const_kmeans.real, const_kmeans.imag, marker='+', color='black')
+                
 
         ax.set_aspect('equal')
 
