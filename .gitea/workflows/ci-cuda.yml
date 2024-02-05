@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04-gpu
+    runs-on: ubuntu-20.04_with-gpu
     strategy:
       matrix:
         python-version: ["3.11"]
