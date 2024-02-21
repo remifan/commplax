@@ -1,4 +1,13 @@
+# Dev utilities
 ipykernel
 tqdm
 seaborn
 xlrd
+
+# Jax
+--find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+jax[cuda11_pip]
+
+# Commplax
+--editable
+.

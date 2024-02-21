@@ -1,6 +1,6 @@
 {
   "name": "CUDA",
-  "image": "nvidia/cuda:11.8.0-devel-ubuntu20.04", 
+  "image": "nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04", 
   "runArgs": [
     "--gpus=all"
   ],
