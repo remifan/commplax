@@ -9,5 +9,4 @@ xlrd
 jax[cuda11_pip]
 
 # Commplax
---editable
-.
+-e .
