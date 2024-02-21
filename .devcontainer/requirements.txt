@@ -1,7 +1,4 @@
-numpy
-scikit-learn
-matplotlib
-tensorflow
-autokeras
 ipykernel
-regex
+tqdm
+seaborn
+xlrd
