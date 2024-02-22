@@ -18,20 +18,13 @@ RUN apt-get update &&\
     apt-get install -y --no-install-recommends curl gcc g++ gnupg unixodbc-dev openssl git &&\
     apt-get install -y software-properties-common ca-certificates &&\
     apt-get install -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev libssl-dev libreadline-dev libffi-dev wget libbz2-dev libsqlite3-dev && \
-    update-ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    update-ca-certificates
 
-RUN mkdir /python && cd /python && \
-    wget https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz && \
-    tar -zxvf Python-${PYTHON_VERSION}.tgz && \
-    cd Python-${PYTHON_VERSION} && \
-    ls -lhR && \
-    ./configure --enable-optimizations && \
-    make install && \
-    rm -rf /python
+RUN apt-get install software-properties-common wget curl \
+    python3-dev python3-pip python3-wheel python3-setuptools -y
 
 RUN python3 -m pip install --upgrade pip && \
-    pip3 install --no-cache-dir --upgrade "jax[${JAX_VERSION}]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    pip3 install --upgrade "jax[${JAX_VERSION}]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 # clean up
 RUN pip3 cache purge && \
