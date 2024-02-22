@@ -1,13 +1,10 @@
 {
   "name": "CUDA-JAX",
-  "image": "nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04", 
 	"build": {
 		"dockerfile": "Dockerfile",
 		"args": {
       "OS_VARIANT": "ubuntu22.04",
       "CUDA_VERSION": "11.8.0",
-      "CUDNN_VERSION": "8",
-      "PYTHON_VERSION": "3.11.8",
       "JAX_VERSION": "cuda11_pip"
     }
 	},
