@@ -18,6 +18,6 @@ RUN python3 -m pip install --upgrade pip && \
     python3 -m pip install --upgrade setuptools==69.0.3 gitpython==3.1.41
 
 # Install JAX
-python3 -m pip install "jax[${JAX_VERSION}]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html && \
+RUN python3 -m pip install "jax[${JAX_VERSION}]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html && \
     python3 -m pip cache purge
 
