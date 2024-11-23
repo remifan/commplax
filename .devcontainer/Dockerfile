@@ -1,9 +1,9 @@
 ARG OS_VARIANT="ubuntu22.04" 
-ARG CUDA_VERSION="11.8.0"
+ARG CUDA_VERSION="12.4.1"
 
 FROM nvidia/cuda:${CUDA_VERSION}-base-${OS_VARIANT}
 
-ARG JAX_VERSION="cuda11_pip"
+ARG JAX_VERSION="cuda12"
 ENV DEBIAN_FRONTEND noninteractive
 
 # RUN apt-get update && apt-get upgrade -y

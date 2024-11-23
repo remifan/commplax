@@ -1,6 +1,7 @@
 #
 nb_debug
 local
+data
 
 # doc
 docs/_build
@@ -9,6 +10,7 @@ docs/_autosummary
 
 # vim
 .vim
+*.swp
 
 # vscode
 .vscode

@@ -20,7 +20,7 @@ from scipy import signal
 from scipy.cluster.vq import kmeans
 
 
-def glance(x):
+def glance(x, spectrum=True, waveform=True):
     x = np.asarray(x)
 
     if x.ndim > 1:
@@ -35,8 +35,10 @@ def glance(x):
     asp = lambda gs: fig.add_subplot(gs)
 
     for ch in range(nch):
-        pwelch(x[:,ch], ax=asp(gs[0, ch]))
-        waveform(x[:,ch], axes=[asp(gs[1, ch]), asp(gs[2, ch])])
+        if spectrum:
+            pwelch(x[:,ch], ax=asp(gs[0, ch]))
+        if waveform:
+            waveform(x[:,ch], axes=[asp(gs[1, ch]), asp(gs[2, ch])])
 
 
 def _const_optim(x, c):

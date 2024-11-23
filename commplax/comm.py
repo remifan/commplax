@@ -249,8 +249,10 @@ def anuqrng_bit(L):
     return bits
 
 
-def rcosdesign(beta, span, sps, shape='normal', dtype=np.float64):
-    ''' ref:
+def rcosdesign(beta, span, sps, shape='normal', norm_gain=False, dtype=np.float64):
+    ''' 
+        implementation follows the descriptions of [1,2], function interface follows [3]
+        ref:
         [1] https://en.wikipedia.org/wiki/Root-raised-cosine_filter
         [2] https://en.wikipedia.org/wiki/Raised-cosine_filter
         [3] Matlab R2019b `rcosdesign`
@@ -294,7 +296,8 @@ def rcosdesign(beta, span, sps, shape='normal', dtype=np.float64):
     else:
         raise ValueError('invalid shape')
 
-    b /= np.sqrt(np.sum(b**2)) # normalize filter gain
+    if norm_gain:
+        b /= np.sqrt(np.sum(b**2)) # normalize filter gain
 
     return b
 

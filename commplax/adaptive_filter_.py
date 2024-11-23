@@ -23,6 +23,7 @@ from commplax import comm, xcomm, xop, cxopt
 from jax.tree_util import tree_flatten, tree_unflatten
 from jax.lax import stop_gradient
 from commplax.cxopt import Schedule
+import dataclasses as dc
 
 Array = Any
 Params = Any
@@ -36,23 +37,28 @@ UpdateFn = Callable[[Step, AFState, Signal], AFState]
 ApplyFn = Callable[[Any, Any], Any]
 
 
-class AdaptiveFilter(NamedTuple):
-    init_fn: InitFn
-    update_fn: UpdateFn
-    eval_fn: ApplyFn
+@dc.dataclass
+class AdaptiveFilter():
+    name: str = dc.field(default="", metadata={'description': 'for display only'})
+    init: InitFn = None
+    update: UpdateFn = None
+    apply: ApplyFn = None
+
+    def __iter__(self):
+        return iter(dc.astuple(self)[1:]) # skip 'name' property on unpack
 
 
 def adaptive_filter(af_maker: Callable, trainable=False):
     @functools.wraps(af_maker)
     def _af_maker(*args, **kwargs):
-        init, update, apply = af_maker(*args, **kwargs)
+        af_made = af_maker(*args, **kwargs)
+        init, update, apply = af_made
 
         @functools.wraps(init)
         def _init(*args, **kwargs):
             x0 = init(*args, **kwargs)
             return jax.device_put(x0)
 
-        # @jax.jit
         @functools.wraps(update)
         def _update(i, af_state, af_inp):
             if trainable:
@@ -61,17 +67,17 @@ def adaptive_filter(af_maker: Callable, trainable=False):
             else:
                 af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
             af_inp = jax.device_put(af_inp)
+            af_state = jax.device_put(af_state)
             af_state, af_out = stop_gradient(update(i, af_state, af_inp))
             return af_state, af_out
 
-        # @jax.jit
         @functools.wraps(apply)
         def _apply(af_ps, af_xs):
             return apply(af_ps, af_xs)
 
         _update.trainable = trainable
 
-        return AdaptiveFilter(_init, _update, _apply)
+        return AdaptiveFilter(af_made.name, _init, _update, _apply)
 
     return _af_maker
 
@@ -255,9 +261,9 @@ def lms(
 
     def init(w0=None, taps=19, dims=2, dtype=const.dtype):
         if w0 is None:
-            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
-            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+            w0 = w0.at[np.arange(dims), np.arange(dims), ctap].set(1.)
         return w0.astype(dtype)
 
     def loss_fn(w, inp, i):
@@ -273,10 +279,10 @@ def lms(
         w = w - lr(i) * g.conj()
         return w, out
 
-    def apply(ws, yf):
-        return vmimo(ws, yf)
+    def apply(w, y):
+        return mimo(w, y)
 
-    return AdaptiveFilter(init, update, apply)
+    return AdaptiveFilter("lms", init, update, apply)
 
 
 @adaptive_filter
@@ -313,9 +319,9 @@ def cma(
 
     def init(w0=None, taps=19, dims=2, dtype=np.complex64):
         if w0 is None:
-            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
-            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+            w0 = w0.at[np.arange(dims), np.arange(dims), ctap].set(1.)
         return w0.astype(dtype)
 
     def loss_fn(w, u):
@@ -329,15 +335,14 @@ def cma(
         w = w - lr(i) * g.conj()
         return w, out
 
-    def apply(ws, yf):
-        return vmimo(ws, yf)
+    def apply(w, y):
+        return mimo(w, y)
 
-    return AdaptiveFilter(init, update, apply)
+    return AdaptiveFilter("cma", init, update, apply)
 
 
 @adaptive_filter
 def mucma(
-    dims: int = 2,
     lr: Union[float, Schedule] = 1e-4,
     R2: Union[float, Schedule] = 1.32,
     delta: int = 6,
@@ -369,7 +374,7 @@ def mucma(
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
-    def init(w0=None, taps=19, dtype=np.complex64):
+    def init(w0=None, taps=19, dims=2, dtype=np.complex64):
         if w0 is None:
             w0 = np.zeros((dims, dims, taps), dtype=dtype)
             ctap = (taps + 1) // 2 - 1
@@ -381,6 +386,7 @@ def mucma(
         return w0, z, r, jnp.asarray(beta)
 
     def update(i, state, u):
+        dims = u.shape[1]
         w, z, r, betapow = state
         z = jnp.concatenate((mimo(w, u)[None, :], z[:-1, :])) #TODO: c2r?
         z0 = jnp.repeat(z, dims, axis=-1)
@@ -410,10 +416,10 @@ def mucma(
         state = (w, z, r, betapow)
         return state, out
 
-    def apply(ws, yf):
-        return vmimo(ws, yf)
+    def apply(s, y):
+        return mimo(s[0], y)
 
-    return AdaptiveFilter(init, update, apply)
+    return AdaptiveFilter("mucma", init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)
@@ -475,7 +481,7 @@ def rde(
     def apply(ws, yf):
         return vmimo(ws, yf)
 
-    return AdaptiveFilter(init, update, apply)
+    return AdaptiveFilter("rde", init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)
@@ -579,7 +585,7 @@ def ddlms(
         res = vr2c(vmimo(ws, yf)) * fs * ss + bs
         return vc2r(res) if not jnp.iscomplexobj(yf) else res
 
-    return AdaptiveFilter(init, update, apply)
+    return AdaptiveFilter("ddlms", init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)
@@ -663,7 +669,7 @@ def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
     def apply(phis, ys):
         return jax.vmap(lambda y, phi: y * jnp.exp(-1j * phi))(ys, phis)
 
-    return AdaptiveFilter(init, update, apply)
+    return AdaptiveFilter('FOE-KF', init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)

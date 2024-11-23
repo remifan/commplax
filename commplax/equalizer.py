@@ -150,7 +150,7 @@ def mucmamimo(
 
 
 def lmsmimo(sps=2, taps=32, train=True,
-            lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**12, beta=0.9,
+            lr_w=1/2**6, lr_f=1/2**7, lr_s=0., lr_b=1/2**12, beta=0, grad_max=(50., 50.),
             const=comm.const('16QAM', norm=True), backend='cpu'):
     lms_init, lms_update, lms_map = af.ddlms(train=train,
                                              const=const,
@@ -158,6 +158,7 @@ def lmsmimo(sps=2, taps=32, train=True,
                                              lr_f=lr_f,
                                              lr_s=lr_s,
                                              lr_b=lr_b,
+                                             grad_max=grad_max,
                                              beta=beta)
     if not np.isscalar(taps):
         ntaps = taps.shape[-1]
