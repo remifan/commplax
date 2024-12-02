@@ -44,6 +44,17 @@ def qamscale(modformat):
     return jnp.sqrt((M - 1) * 2 / 3) if comm.is_square_qam(M) else jnp.sqrt(2/3 * (M * 31/32 - 1))
 
 
+def partition_QAM(x, slicers=None):
+    is_scalar = jnp.isscalar(x)
+    x = jnp.atleast_1d(x)
+    if slicers is None:
+        radii = jnp.sqrt(jnp.array([2, 10, 18]) / 10) # normalized 16-QAM
+        slicers = (radii[1:] + radii[:-1]) / 2
+    groups = jnp.sum(jnp.abs(x)[:, None] > slicers[None, :], axis=1)
+    groups = jnp.squeeze(groups) if is_scalar else groups
+    return groups
+
+
 def dbp_params(
     sample_rate,                                      # sample rate of target signal [Hz]
     span_length,                                      # length of each fiber span [m]
