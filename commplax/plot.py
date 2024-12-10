@@ -20,7 +20,7 @@ from scipy import signal
 from scipy.cluster.vq import kmeans
 
 
-def glance(x, spectrum=True, waveform=True):
+def glance(x, show_spectrum=True, show_waveform=True):
     x = np.asarray(x)
 
     if x.ndim > 1:
@@ -35,9 +35,9 @@ def glance(x, spectrum=True, waveform=True):
     asp = lambda gs: fig.add_subplot(gs)
 
     for ch in range(nch):
-        if spectrum:
+        if show_spectrum:
             pwelch(x[:,ch], ax=asp(gs[0, ch]))
-        if waveform:
+        if show_waveform:
             waveform(x[:,ch], axes=[asp(gs[1, ch]), asp(gs[2, ch])])
 
 
@@ -159,3 +159,19 @@ def lpvssnr(LP, S, label=None, ax=None, show_std=True, show_ex=True):
     ax.set_ylabel('SNR (dB)')
 
 
+def filter_response(b):
+    w, h = signal.freqz(b)
+    fig, ax1 = plt.subplots()
+    ax1.set_title('Digital filter frequency response')
+
+    ax1.plot(w, 20 * np.log10(abs(h)), 'b')
+    ax1.set_ylabel('Amplitude [dB]', color='b')
+    ax1.set_xlabel('Frequency [rad/sample]')
+
+    ax2 = ax1.twinx()
+    angles = np.unwrap(np.angle(h))
+    ax2.plot(w, angles, 'g')
+    ax2.set_ylabel('Angle (radians)', color='g')
+    ax2.grid(True)
+    ax2.axis('tight')
+    plt.show()
