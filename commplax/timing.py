@@ -3,11 +3,12 @@ import jax
 from jax import numpy as jnp, lax
 from commplax.util import default_complexing_dtype, default_floating_dtype
 
+
 def symbol_timing_sync():
     ''' operate at 2 samples per symbol
-        adapted from the Matlab codes in [1](pp.493)
+        adapted from the Matlab codes in [1]
     References:
-      [1] Digital Communications_ A Discrete-Time Approach -- Rice, Michael
+      [1] Digital Communications A Discrete-Time Approach -- Rice, Michael (pp.493)
     '''
     # TODO add spec for these parameters
     K1 = -2.46e-3
