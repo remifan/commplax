@@ -6,7 +6,7 @@ import equinox as eqx
 from equinox import field
 from commplax import adaptive_filter as _af, xcomm
 from commplax.util import default_complexing_dtype, default_floating_dtype, astuple
-from functools import wraps, partial
+from functools import lru_cache, wraps, partial
 from jaxtyping import Array, Float, Int, PyTree
 from typing import Callable, Any
 from typing import Callable, TypeVar
@@ -69,56 +69,7 @@ def scan(mod, xs, filter=eqx.is_array, func=None, cb=None):
     return mod, ys
 
 
-class MIMOCell(eqx.Module):
-    fifo: Array
-    state: Array
-    cnt: int
-    sps: int = field(static=True)
-    af: PyTree = field(static=True)
-    decimate: bool = field(static=True)
-    frozen: bool = field(static=True)
-
-    def __init__(
-        self,
-        num_taps: int = 15,
-        dims: int = 1,
-        dtype=None,
-        sps: int = 1,
-        af: PyTree = None,
-        state: Array = None,
-        fifo: Array = None,
-        cnt: int = 0,
-        phase: int = 0,
-        decimate: bool = False,
-        frozen: bool = False,
-    ):
-        dtype = default_complexing_dtype() if dtype is None else dtype
-        self.sps = sps
-        self.af = _af.lms() if af is None else af
-        self.state = self.af.init(taps=num_taps, dims=dims) if state is None else state
-        self.fifo = jnp.zeros((num_taps, dims), dtype=dtype) if fifo is None else fifo
-        self.cnt = jnp.asarray(cnt)
-        self.phase = jnp.asarray(phase)
-        self.frozen = frozen
-        self.decimate = decimate
-
-    def __call__(self, input: PyTree):
-        x, *args = astuple(input)
-        if self.decimate:
-            assert x.shape[0] == sps
-        shift = self.sps if self.decimate else 1
-        fifo = jnp.roll(self.fifo, -shift, axis=0).at[-shift:].set(x)
-        output = self.af.apply(self.state, fifo)
-        state = lax.cond(
-            (self.decimate | (self.cnt % self.sps == self.phase % self.sps)) & (not self.frozen),
-            lambda *_: self.af.update(self.cnt, self.state, (fifo, *args))[0],
-            lambda *_: self.state,
-            )
-        cell = dc.replace(self, fifo=fifo, state=state, cnt=self.cnt+1)
-        return cell, output
-
-
-MIMO = make_iterable(MIMOCell)
+# MIMO = make_iterable(MIMOCell) # maybe buggy
 
 
 class FOE(eqx.Module):

@@ -218,7 +218,7 @@ def mimozerodelaypads(taps, sps=2, rtap=None):
     return filterzerodelaypads(taps, sps, rtap)
 
 
-def mimoinitializer(taps, dims, dtype=None, initkind='centralspike'):
+def mimoinitializer(taps, dims, dtype=None, initkind='centralspike', nspike=1):
     dtype = default_complexing_dtype() if dtype is None else dtype
     if np.isscalar(taps):
         match initkind.lower():
@@ -226,8 +226,10 @@ def mimoinitializer(taps, dims, dtype=None, initkind='centralspike'):
                 w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
             case "centralspike":
                 w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
-                ctap = (taps + 1) // 2 - 1
-                w0 = w0.at[np.arange(dims), np.arange(dims), ctap].set(1.)
+                ctap = (taps + 1) // 2 - 1 
+                ctaps = jnp.arange(ctap - nspike//2, ctap + (nspike+1)//2)
+                for i in ctaps:
+                    w0 = w0.at[np.arange(dims), np.arange(dims), i].set(1.)
             case _:
                 raise ValueError('invalid initkind %s' % initkind)
     else:
@@ -473,7 +475,7 @@ def lms_MoriY(
 
 @adaptive_filter
 def cma(
-    lr: Union[float, Schedule] = 0.01,
+    lr: Union[float, Schedule] = 0.03,
     R2: Optional[float]=1.32,
     const: Optional[Array]=None,
     norm: bool=True,
@@ -518,8 +520,8 @@ def cma(
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
     R1 = jnp.sqrt(R2)
 
-    def init(taps=19, dims=2, dtype=np.complex64):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike')
+    def init(taps=19, dims=2, dtype=np.complex64, nspike=1):
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
         m0 = 1 # small value of leak, see [4]
         s0 = (w0, m0)
         return s0
