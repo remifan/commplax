@@ -1,15 +1,15 @@
 name: CI
 run-name: ${{ gitea.actor }} is building CI
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+# on:
+#   push:
+#     branches:
+#       - main
+#   pull_request:
+#     branches:
+#       - main
 
-# on: workflow_dispatch
+on: workflow_dispatch
 
 permissions:
   contents: read  # to fetch code

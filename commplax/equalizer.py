@@ -104,3 +104,6 @@ class MIMOCell(eqx.Module):
         state = (self.state[0].at[..., h_i].set(state_i[0]),) + state_i[1:]
         cell = dc.replace(self, fifo=fifo, state=state, inner_i=inner_i, outer_i=self.outer_i+1)
         return cell, output
+
+
+#TODO tap profiler to track clock drift

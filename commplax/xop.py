@@ -15,7 +15,7 @@
 
 import numpy as np
 from jax import lax, jit, vmap, numpy as jnp, device_put
-from functools import partial
+from functools import partial, lru_cache
 from commplax import op
 
 
@@ -88,7 +88,8 @@ def _conv1d_lax(signal, kernel, mode):
 
     return x[0,:,0]
 
-# TODO apply lru_cache?
+
+@lru_cache
 def _largest_prime_factor(n):
     '''brute-force finding of greatest prime factor of integer number.
     '''
@@ -184,7 +185,31 @@ def _conv1d_fft_oa_full(signal, kernel, fft_size):
     return signal
 
 
-frame_shape = op.frame_shape
+def frame_shape(s, flen, fstep, pad_end=False, allowwaste=True):
+    n = s[0]
+    ndim = len(s)
+
+    if ndim < 2:
+        raise ValueError('rank must be atleast 2, got %d instead' % ndim)
+
+    if n < flen:
+        raise ValueError('array length {} < frame length {}'.format(n, flen))
+
+    if flen < fstep:
+        raise ValueError('frame length {} < frame step {}'.format(flen, fstep))
+
+    if pad_end:
+        fnum = -(-n // fstep) # double negatives to round up
+        pad_len = (fnum - 1) * fstep + flen - n
+        n = n + pad_len
+    else:
+        waste = (n - flen) % fstep
+        if not allowwaste and waste != 0:
+            raise ValueError('waste %d' % waste)
+        fnum = 1 + (n - flen) // fstep
+        n = (fnum - 1) * fstep + flen
+
+    return (fnum, flen) + s[1:]
 
 
 @partial(jit, static_argnums=(2,3))
@@ -248,19 +273,6 @@ def _frame(array, flen, fstep, pad_end, pad_constants):
 
 def frame(x, flen, fstep, pad_end=False, pad_constants=0.):
     return _frame(x, flen, fstep, pad_end, pad_constants)
-
-
-def framescaninterp(x, func, flen, fstep, P=1):
-    fn = lambda carry, y: (carry, func(y))
-    N = x.shape[0]
-    xf = frame(x, flen, fstep, pad_end=True)
-    F = xf.shape[0]
-    _, ys = scan(fn, None, xf)
-    xp = jnp.arange(F) * fstep + flen // 2
-    x = jnp.arange(N * P) / P
-    interp = vmap(lambda x, xp, fp: jnp.interp(x, xp, fp), in_axes=(None, None, -1), out_axes=-1)
-    ysip = interp(x, xp, ys) / P
-    return ysip
 
 
 @partial(jit, static_argnums=(1,))
