@@ -317,7 +317,7 @@ def lms(
 @partial(adaptive_filter, trainable=True)
 def rls_lms(
     λ: Union[float, Schedule] = 0.999,
-    δ: float = 0.1,
+    δ: float = 0.01,
     train: Union[bool, Schedule] = False,
     const: Optional[Array]=None,
 ) -> AdaptiveFilter:
@@ -342,7 +342,12 @@ def rls_lms(
 
     @partial(jax.vmap, in_axes=(None, 0, (None, 0)), out_axes=(0, -1))
     def update(i, s, inp):
-        w, P = s
+        w, _P = s
+        N, dims = u.shape[0], w.shape[0]
+        # in case of polyphase filtering, P is downsized
+        i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
+        P = _P[i_P]
+
         u, x = inp
         u_i = u.reshape(-1, order='F')[:, None]
         h = w.conj().reshape(-1)[:, None]
@@ -358,7 +363,9 @@ def rls_lms(
 
         dims = w.shape[0]
         w = h.conj().reshape((dims, -1))
-        s = w, P
+
+        _P = _P.at[i_P].set(P)
+        s = w, _P
         out = (ε, v)
         return s, out
 
@@ -569,12 +576,13 @@ def cma(
 @adaptive_filter
 def rls_cma(
     λ: Union[float, Schedule] = 0.999,
-    δ: float = 0.1,
+    δ: float = 0.01,
     R2: Optional[float]=1.32,
     const: Optional[Array]=None
 ) -> AdaptiveFilter:
     """RLS-CMA blind MIMO adaptive filter.
-
+    λ: forgetting factor (λ<1)
+    δ: is small positive number
     [1] Md. S. Faruk and S. J. Savory, “Digital Signal Processing for
      Coherent Transceivers Employing Multilevel Formats,” J. Lightwave
      Technol., vol. 35, no. 5, pp. 1125-1141, Mar. 2017, doi: 10.1109/JLT.2017.2662319.
@@ -585,14 +593,19 @@ def rls_cma(
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
-    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype()):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike')
+    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
         P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
         return (w0, P0)
 
     @partial(jax.vmap, in_axes=(None, 0, None), out_axes=(0, -1))
     def update(i, s, u):
-        w, P = s
+        w, _P = s
+        N, dims = u.shape[0], w.shape[0]
+        # in case of polyphase filtering, P is downsized
+        i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
+        P = _P[i_P]
+
         u_i = u.reshape(-1, order='F')[:, None]
         h = w.conj().reshape(-1)[:, None]
         λ = _λ(i)
@@ -604,9 +617,10 @@ def rls_cma(
         h = h + k * ε.conj()
         P = 1/λ * P - 1/λ * k * z.conj().T @ P
 
-        dims = w.shape[0]
         w = h.conj().reshape((dims, -1))
-        s = w, P
+
+        _P = _P.at[i_P].set(P)
+        s = w, _P
         out = (ε,)
         return s, out
 
@@ -650,12 +664,12 @@ def mu_cma(
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
-    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype()):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike')
+    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
         z0 = jnp.zeros((delta, dims), dtype=dtype)
         r0 = jnp.zeros((dims, dims, delta), dtype=dtype)
-        beta = jnp.asarray(beta)
-        s0 = (w0, z0, r0, beta)
+        beta_ = jnp.asarray(beta)
+        s0 = (w0, z0, r0, beta_)
         return s0 
 
     def update(i, state, u):
@@ -700,7 +714,7 @@ def mu_cma(
 def rde(
     lr: Union[float, Schedule] = 2**-15,
     train: Union[bool, Schedule] = False,
-    Rs: Array = np.unique(np.abs(comm.const("16QAM", norm=True))),
+    Rs: Array = jnp.array([0.4472136 , 1., 1.34164079]),
     const: Optional[Array] = None
 ) -> AdaptiveFilter:
     """Radius Directed adaptive Equalizer
@@ -728,8 +742,8 @@ def rde(
     else:
         Rs = jnp.array(Rs)
 
-    def init(dims=2, w0=None, taps=32, dtype=default_complexing_dtype()):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike')
+    def init(dims=2, w0=None, taps=32, dtype=default_complexing_dtype(), nspike=1):
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
         s0 = w0,
         return s0
 
@@ -743,12 +757,75 @@ def rde(
         l = jnp.sum(jnp.abs(R2 - jnp.abs(v[0,:])**2))
         return l
 
-    def update(i, w, inp):
+    def update(i, s, inp):
+        w, = s
         u, x = inp
         l, g = jax.value_and_grad(loss_fn)(w, u, x, i)
         out = (w, l)
         w = w - lr(i) * g.conj()
-        return w, out
+        s = w,
+        return s, out
+
+    def apply(s, y):
+        w = tuple(s)[0]
+        return mimo(w, y)
+
+    return AdaptiveFilter(init, update, apply)
+
+
+@partial(adaptive_filter)
+def rls_rde(
+    λ: Union[float, Schedule] = 0.999,
+    δ: float = 0.01,
+    Rs: Array = jnp.array([0.4472136 , 1., 1.34164079]),
+    const: Optional[Array]=None
+) -> AdaptiveFilter:
+    """RLS-RDE blind MIMO adaptive filter.
+    λ: forgetting factor (λ<1)
+    δ: is small positive number
+    [1] Md. S. Faruk and S. J. Savory, “Digital Signal Processing for
+     Coherent Transceivers Employing Multilevel Formats,” J. Lightwave
+     Technol., vol. 35, no. 5, pp. 1125-1141, Mar. 2017, doi: 10.1109/JLT.2017.2662319.
+
+    """
+    _λ = cxopt.make_schedule(λ)
+
+    if const is not None:
+        Rs = jnp.array(jnp.unique(jnp.abs(const)))
+    else:
+        Rs = jnp.array(Rs)
+
+    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
+        P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
+        return (w0, P0)
+
+    @partial(jax.vmap, in_axes=(None, 0, None), out_axes=(0, -1))
+    def update(i, s, u):
+        w, _P = s
+        N, dims = u.shape[0], w.shape[0]
+        # in case of polyphase filtering, P is downsized
+        i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
+        P = _P[i_P]
+
+        u_i = u.reshape(-1, order='F')[:, None]
+        h = w.conj().reshape(-1)[:, None]
+        λ = _λ(i)
+
+        z = u_i @ u_i.conj().T @ h
+        k = 1/λ * P @ z / (1 + 1/λ * z.conj().T @ P @ z)
+        vs = jnp.sqrt(jnp.abs(jnp.squeeze(h.conj().T @ z)))
+        R2 = Rs[jnp.argmin(jnp.abs(Rs - vs))]**2
+        ε = R2 - vs**2
+        h = h + k * ε.conj()
+        P = 1/λ * P - 1/λ * k * z.conj().T @ P
+
+        w = h.conj().reshape((dims, -1))
+
+        _P = _P.at[i_P].set(P)
+        s = w, _P
+        out = (ε,)
+        return s, out
 
     def apply(s, y):
         w = tuple(s)[0]

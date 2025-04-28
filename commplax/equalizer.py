@@ -1,6 +1,6 @@
 import dataclasses as dc
 import numpy as np
-from jax import lax, numpy as jnp
+from jax import lax, numpy as jnp, debug as jdbg
 import equinox as eqx
 from equinox import field
 from commplax import adaptive_filter as _af
@@ -87,21 +87,28 @@ class MIMOCell(eqx.Module):
         x, *args = astuple(input)
         fifo = jnp.roll(self.fifo, -1, axis=0).at[-1:].set(x)
         # fetch the filter coeff with correct phase & form new state
-        h_i = self.h_phase[self.inner_i % self.up]
+        i_w = self.h_phase[self.inner_i % self.up]
         # enable flag of valid input
         valid_input_phase = jnp.any(self.outer_i % self.down == self.in_phase)
-        state_i = (self.state[0].at[..., h_i].get(mode='fill', fill_value=0.),) + self.state[1:]
+        w_i = self.state[0].at[..., i_w].get(mode='fill', fill_value=0.)
+        state_i = (w_i,) + self.state[1:]
+
+        # apply the AF on the input
+        dummy_out = jnp.zeros_like(x)
         output, inner_i = lax.cond(
             valid_input_phase,
             lambda *_: (self.af.apply(state_i, fifo), self.inner_i+1),
-            lambda *_: (jnp.zeros_like(x), self.inner_i),
+            lambda *_: (dummy_out, self.inner_i),
             )
+        # update the AF states
         state_i = lax.cond(
             valid_input_phase & (not self.frozen),
             lambda *_: self.af.update(self.inner_i, state_i, (fifo, *args))[0],
             lambda *_: state_i,
             )
-        state = (self.state[0].at[..., h_i].set(state_i[0]),) + state_i[1:]
+
+        w_i = self.state[0].at[..., i_w].set(state_i[0])
+        state = (w_i,) + state_i[1:]
         cell = dc.replace(self, fifo=fifo, state=state, inner_i=inner_i, outer_i=self.outer_i+1)
         return cell, output
 
