@@ -11,7 +11,6 @@ from jaxtyping import Array, Float, Int, PyTree
 from typing import Callable, Any
 from typing import Callable, TypeVar
 from numpy.typing import ArrayLike
-import types
 from inspect import isclass
 
 

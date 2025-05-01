@@ -282,7 +282,7 @@ def lms(
     train = make_schedule(train)
     const = jnp.asarray(comm.const('16QAM', norm=True)) if const is None else const
 
-    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype()):
+    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
         w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike')
         s0 = w0,
         return s0
@@ -334,8 +334,8 @@ def rls_lms(
     train = cxopt.make_schedule(train)
     const = jnp.asarray(comm.const('16QAM', norm=True)) if const is None else const
 
-    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype()):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike')
+    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
         P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
         s0 = (w0, P0)
         return s0
@@ -343,6 +343,7 @@ def rls_lms(
     @partial(jax.vmap, in_axes=(None, 0, (None, 0)), out_axes=(0, -1))
     def update(i, s, inp):
         w, _P = s
+        u, x = inp
         N, dims = u.shape[0], w.shape[0]
         # in case of polyphase filtering, P is downsized
         i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
@@ -353,13 +354,12 @@ def rls_lms(
         h = w.conj().reshape(-1)[:, None]
         λ = _λ(i)
 
-        z = u_i @ u_i.conj().T @ h
-        k = 1/λ * P @ z / (1 + 1/λ * z.conj().T @ P @ z)
-        v = jnp.squeeze(h.conj().T @ z)
+        k = 1/λ * P @ u_i / (1 + 1/λ * u_i.conj().T @ P @ u_i)
+        v = jnp.squeeze(h.conj().T @ u_i)
         d = jnp.where(train(i), x, decision(const, v))
         ε = d - v
         h = h + k * ε.conj()
-        P = 1/λ * P - 1/λ * k * z.conj().T @ P
+        P = 1/λ * P - 1/λ * k * u_i.conj().T @ P
 
         dims = w.shape[0]
         w = h.conj().reshape((dims, -1))
@@ -378,10 +378,10 @@ def rls_lms(
 
 @partial(adaptive_filter, trainable=True)
 def lms_MoriY(
-    lr_w: Union[float, Schedule] = 1/2**4,
-    lr_f: Union[float, Schedule] = 1/2**7,
+    lr_w: Union[float, Schedule] = 1/2**5,
+    lr_f: Union[float, Schedule] = 1/2**6,
     lr_s: Union[float, Schedule] = 0.,
-    lr_b: Union[float, Schedule] = 1/2**7,
+    lr_b: Union[float, Schedule] = 1/2**10,
     train: Union[bool, Schedule] = False,
     grad_max: Tuple[float, float] = (30., 30.),
     eps: float = 1e-8,
@@ -421,12 +421,14 @@ def lms_MoriY(
     lr_b = make_schedule(lr_b)
     train = make_schedule(train)
 
-    def init(taps=32, dims=2, dtype=default_complexing_dtype()):
+    def init(taps=32, dims=2, dtype=default_complexing_dtype(), nspike=1):
         w0 = mimoinitializer(taps, dims, dtype, 'zeros')
-        f0 = jnp.full((dims,), 1., dtype=dtype)
-        s0 = jnp.full((dims,), 1., dtype=dtype)
-        b0 = jnp.full((dims,), 0., dtype=dtype)
-        fshat0 = jnp.full((dims,), 1., dtype=dtype)
+        cplx = default_complexing_dtype()
+        _dims = dims if jnp.iscomplexobj(w0) else dims // 2
+        f0 = jnp.full((_dims,), 1., dtype=cplx)
+        s0 = jnp.full((_dims,), 1., dtype=cplx)
+        b0 = jnp.full((_dims,), 0., dtype=cplx)
+        fshat0 = jnp.full((_dims,), 1., dtype=cplx)
         return (w0, f0, s0, b0, fshat0)
 
     def update(i, state, inp):
@@ -438,17 +440,16 @@ def lms_MoriY(
         c = k * s
         z = c + b
         q = v * fshat + b
-        # d = jnp.where(train(i), r2c(x), decision(const, q))
-        d = jnp.where(train(i), x, decision(const, q))
+        d = jnp.where(train(i), r2c(x), decision(const, q))
         l = jnp.sum(jnp.abs(z - d)**2)
 
         psi_hat = jnp.abs(f)/f * jnp.abs(s)/s
         e_w = (d - b) * psi_hat - v
-        # e_w = c2r(e_w) if not jnp.iscomplexobj(w) else e_w
+        e_w = c2r(e_w) if not jnp.iscomplexobj(w) else e_w
         e_f = d - b - k
         e_s = d - b - c
         e_b = d - z
-        gw = -1. / ((jnp.abs(u)**2).sum(axis=0) + eps) * e_w[:, None, None] * u.conj().T[None, ...]
+        gw = -1. / ((jnp.abs(u)**2).sum() + eps) * e_w[:, None, None] * u.conj().T[None, ...]
 
         gf = -1. / (jnp.abs(v)**2 + eps) * e_f * v.conj()
         gs = -1. / (jnp.abs(k)**2 + eps) * e_s * k.conj()
@@ -474,8 +475,8 @@ def lms_MoriY(
 
     def apply(state, y):
         w, f, s, b = state[:4]
-        res = mimo(w, y) * f * s + b
-        return res #c2r(res) if not jnp.iscomplexobj(y) else res
+        res = r2c(mimo(w, y)) * f * s + b
+        return c2r(res) if not jnp.iscomplexobj(w) else res
 
     return AdaptiveFilter(init, update, apply)
 
@@ -594,7 +595,7 @@ def rls_cma(
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
     def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike) if w0 is None else w0
         P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
         return (w0, P0)
 
@@ -796,7 +797,7 @@ def rls_rde(
         Rs = jnp.array(Rs)
 
     def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike) if w0 is None else w0
         P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
         return (w0, P0)
 
@@ -997,10 +998,12 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
     const = jnp.asarray(const)
     train = cxopt.make_schedule(train)
 
-    def init(p0=0j):
-        state0 = (p0, 1j, 0j, Q, R)
+    def init(p0=0j, dims=1):
+        f = lambda x: jnp.full(dims, x)
+        state0 = (f(p0), f(1j), f(0j), f(Q), f(R))
         return state0
 
+    @partial(jax.vmap, in_axes=(None, -1, -1), out_axes=-1)
     def update(i, state, inp):
         Psi_c, P_c, Psi_a, Q, R = state
         y, x = inp
@@ -1030,7 +1033,9 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
 
         return state, out
 
-    def apply(Psi, ys):
+    @partial(jax.vmap, in_axes=-1, out_axes=-1)
+    def apply(s, ys):
+        Psi = tuple(s)[0]
         return ys * jnp.exp(-1j * Psi)
 
     return AdaptiveFilter(init, update, apply)

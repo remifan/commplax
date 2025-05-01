@@ -1,7 +1,41 @@
-import numpy as np
 import jax
-from jax import numpy as jnp, lax
+from jax import lax, numpy as jnp
+import numpy as np
+import equinox as eqx
+from equinox import field
+from jaxtyping import Array, Float, Int, PyTree
+from typing import Any, TypeVar, Callable, Optional, Tuple, Union
+import dataclasses as dc
 from commplax.util import default_complexing_dtype, default_floating_dtype
+
+
+InitFn = Callable
+ApplyFn = Callable
+
+@dc.dataclass
+class SymbolTimingSync():
+    init: InitFn = None
+    apply: ApplyFn = None
+
+    def __iter__(self):
+        return iter((self.init, self.apply))
+
+class SymSync(eqx.Module):
+    fifo: Array
+    state: PyTree
+    af: PyTree = field(static=True)
+
+    def __init__(self, af=None, state=None, fifo=None, dtype=None, af_kwds={}):
+        dtype = default_complexing_dtype() if dtype is None else dtype
+        self.af = symbol_timing_sync(**af_kwds) if af is None else af
+        self.state = self.af.init() if state is None else state
+        self.fifo = jnp.zeros(4, dtype=dtype) if fifo is None else fifo
+
+    def __call__(self, input):
+        fifo = jnp.roll(self.fifo, -1, axis=0).at[-1:].set(input)
+        state, out = self.af.apply(self.state, fifo)
+        ss = dc.replace(self, fifo=fifo, state=state)
+        return ss, out[0]
 
 
 def symbol_timing_sync():
@@ -70,5 +104,5 @@ def symbol_timing_sync():
         state = μ_next, η_next, strobe, vi, B
         return state, (y, e, μ)
 
-    return init, apply
+    return SymbolTimingSync(init, apply)
 

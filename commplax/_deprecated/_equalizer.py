@@ -16,7 +16,8 @@
 import numpy as np
 from functools import partial
 from jax import jit, device_put, numpy as jnp
-from commplax import xop, comm, xcomm, util, adaptive_filter as af
+from commplax import xop, comm, xcomm, util
+from commplax._deprecated import _adaptive_filter as af
 
 
 def tddbp(signal, sr, lp, dist, spans, taps, xi=0.6, D=16.7E-6, fref=194.1e12, fc=194.1e12, polmux=True, mode='SAME', backend=util.gpufirstbackend()):
