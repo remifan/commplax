@@ -421,8 +421,8 @@ def lms_MoriY(
     lr_b = make_schedule(lr_b)
     train = make_schedule(train)
 
-    def init(taps=32, dims=2, dtype=default_complexing_dtype(), nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, 'zeros')
+    def init(taps=32, dims=2, dtype=default_complexing_dtype(), nspike=1, w0=None):
+        w0 = mimoinitializer(taps, dims, dtype, 'zeros') if w0 is None else w0
         cplx = default_complexing_dtype()
         _dims = dims if jnp.iscomplexobj(w0) else dims // 2
         f0 = jnp.full((_dims,), 1., dtype=cplx)
@@ -528,8 +528,8 @@ def cma(
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
     R1 = jnp.sqrt(R2)
 
-    def init(taps=19, dims=2, dtype=np.complex64, nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
+    def init(taps=19, dims=2, dtype=np.complex64, nspike=1, w0=None):
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike) if w0 is None else w0
         m0 = 1 # small value of leak, see [4]
         s0 = (w0, m0)
         return s0
@@ -774,10 +774,11 @@ def rde(
     return AdaptiveFilter(init, update, apply)
 
 
-@partial(adaptive_filter)
+@partial(adaptive_filter, trainable=True)
 def rls_rde(
     λ: Union[float, Schedule] = 0.999,
     δ: float = 0.01,
+    train: Union[bool, Schedule] = False,
     Rs: Array = jnp.array([0.4472136 , 1., 1.34164079]),
     const: Optional[Array]=None
 ) -> AdaptiveFilter:
@@ -790,20 +791,22 @@ def rls_rde(
 
     """
     _λ = cxopt.make_schedule(λ)
+    train = cxopt.make_schedule(train)
 
     if const is not None:
-        Rs = jnp.array(jnp.unique(jnp.abs(const)))
+        Rs = jnp.asarray(jnp.unique(jnp.abs(const)))
     else:
-        Rs = jnp.array(Rs)
+        Rs = jnp.asarray(Rs)
 
     def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
         w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike) if w0 is None else w0
         P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
         return (w0, P0)
 
-    @partial(jax.vmap, in_axes=(None, 0, None), out_axes=(0, -1))
-    def update(i, s, u):
+    @partial(jax.vmap, in_axes=(None, 0, (None, 0)), out_axes=(0, -1))
+    def update(i, s, inp):
         w, _P = s
+        u, x = inp
         N, dims = u.shape[0], w.shape[0]
         # in case of polyphase filtering, P is downsized
         i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
@@ -816,7 +819,9 @@ def rls_rde(
         z = u_i @ u_i.conj().T @ h
         k = 1/λ * P @ z / (1 + 1/λ * z.conj().T @ P @ z)
         vs = jnp.sqrt(jnp.abs(jnp.squeeze(h.conj().T @ z)))
-        R2 = Rs[jnp.argmin(jnp.abs(Rs - vs))]**2
+        R2 = jnp.where(train(i),
+                       jnp.abs(x)**2,
+                       Rs[jnp.argmin(jnp.abs(Rs - vs))]**2)
         ε = R2 - vs**2
         h = h + k * ε.conj()
         P = 1/λ * P - 1/λ * k * z.conj().T @ P

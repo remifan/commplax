@@ -4,4 +4,4 @@ from .module import (
     scan as scan,
 )
 
-__version__ = importlib.metadata.version("equinox")
+__version__ = importlib.metadata.version("commplax")

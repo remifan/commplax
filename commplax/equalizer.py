@@ -172,12 +172,13 @@ class CPR(eqx.Module):
         self.mode = mode
 
     def __call__(self, input):
+        x, *args = astuple(input)
         if self.mode == "feedforward":
             cpr = self.update(input)[0]
-            cpr, output = cpr.apply(input)
+            cpr, output = cpr.apply(x)
         else:
-            cpr, output = cpr.apply(input)
-            cpr = cpr.update(output)[0]
+            cpr, output = cpr.apply(x)
+            cpr = cpr.update((output, *args))[0]
         return cpr, output
 
     def update(self, input):
