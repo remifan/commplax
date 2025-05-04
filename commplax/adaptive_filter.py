@@ -82,6 +82,7 @@ def adaptive_filter(af_maker: C, trainable: bool=False, stop_grad_on_update: boo
             return apply(af_ps, af_xs)
 
         _update.trainable = trainable
+        _update.train = getattr(update, 'train', cxopt.make_schedule(False))
 
         return AdaptiveFilter(_init, _update, _apply)
 
@@ -311,6 +312,8 @@ def lms(
         w = tuple(s)[0]
         return mimo(w, y)
 
+    update.train = train
+
     return AdaptiveFilter(init, update, apply)
 
 
@@ -345,7 +348,7 @@ def rls_lms(
         w, _P = s
         u, x = inp
         N, dims = u.shape[0], w.shape[0]
-        # in case of polyphase filtering, P is downsized
+        # in case of polyphase filtering, P is cropped
         i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
         P = _P[i_P]
 
@@ -372,6 +375,8 @@ def rls_lms(
     def apply(s, y):
         w = astuple(s)[0]
         return mimo(w, y)
+
+    update.train = train
 
     return AdaptiveFilter(init, update, apply)
 
@@ -477,6 +482,8 @@ def lms_MoriY(
         w, f, s, b = state[:4]
         res = r2c(mimo(w, y)) * f * s + b
         return c2r(res) if not jnp.iscomplexobj(w) else res
+
+    update.train = train
 
     return AdaptiveFilter(init, update, apply)
 
@@ -771,6 +778,8 @@ def rde(
         w = tuple(s)[0]
         return mimo(w, y)
 
+    update.train = train
+
     return AdaptiveFilter(init, update, apply)
 
 
@@ -836,6 +845,8 @@ def rls_rde(
     def apply(s, y):
         w = tuple(s)[0]
         return mimo(w, y)
+
+    update.train = train
 
     return AdaptiveFilter(init, update, apply)
 
@@ -1042,6 +1053,8 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
     def apply(s, ys):
         Psi = tuple(s)[0]
         return ys * jnp.exp(-1j * Psi)
+
+    update.train = train
 
     return AdaptiveFilter(init, update, apply)
 

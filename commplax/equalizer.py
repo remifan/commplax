@@ -5,13 +5,14 @@ import equinox as eqx
 from equinox import field
 from commplax import adaptive_filter as _af
 from commplax.util import default_complexing_dtype, default_floating_dtype, astuple
+from commplax.cxopt import make_schedule, Union, Schedule
 from functools import lru_cache
 from jaxtyping import Array, Float, Int, PyTree
 from typing import Callable, Any, TypeVar
 from numpy.typing import ArrayLike
 
 
-@lru_cache
+#@lru_cache  #lru_cache may conflict with jax.jit(jax.pmap)
 def rat_poly_inp_phases(up: int, down: int):
     '''
     see: https://github.com/scipy/scipy/blob/v1.14.1/scipy/signal/_upfirdn_apply.pyx#L458
@@ -30,7 +31,7 @@ def rat_poly_inp_phases(up: int, down: int):
     return x_I
 
 
-@lru_cache
+#@lru_cache  #lru_cache may conflict with jax.jit(jax.pmap)
 def rat_poly_h_phases(h_len:int, up:int, flipped:bool=True):
     """Store coefficients indices in a transposed, flipped arrangement.
     see: https://github.com/scipy/scipy/blob/v1.14.1/scipy/signal/_upfirdn.py#L46
@@ -43,6 +44,13 @@ def rat_poly_h_phases(h_len:int, up:int, flipped:bool=True):
     return ind
 
 
+def af_update_flag(umode, train, i):
+    cond0 = umode(i) > 0 # not frozen
+    cond1 = train(i) # training
+    cond2 = ~train(i) & (umode(i) == 1) # decison
+    return cond0 & (cond1 | cond2)
+
+
 class MIMOCell(eqx.Module):
     fifo: Array
     state: Array
@@ -53,7 +61,7 @@ class MIMOCell(eqx.Module):
     up: int = field(static=True)
     down: int = field(static=True)
     af: PyTree = field(static=True)
-    frozen: bool = field(static=True)
+    update_mode: Union[int, Schedule] = field(static=True)
 
     def __init__(
         self,
@@ -70,7 +78,7 @@ class MIMOCell(eqx.Module):
         outer_i: Array = jnp.array(0),
         in_phase: Array = None,
         h_phase: Array = None,
-        frozen: bool = False,
+        update_mode: Union[int, Schedule] = 1,
     ):
         dtype = default_complexing_dtype() if dtype is None else dtype
         self.up = up
@@ -82,7 +90,7 @@ class MIMOCell(eqx.Module):
         self.in_phase = jnp.asarray(rat_poly_inp_phases(up, down)) if in_phase is None else in_phase
         self.h_phase = jnp.asarray(rat_poly_h_phases(num_taps, up)) if h_phase is None else h_phase
         self.fifo = jnp.zeros((self.h_phase.shape[-1], dims), dtype=dtype) if fifo is None else fifo
-        self.frozen = frozen
+        self.update_mode = make_schedule(update_mode)
 
     def __call__(self, input: PyTree):
         x, *args = astuple(input)
@@ -103,7 +111,7 @@ class MIMOCell(eqx.Module):
             )
         # update the AF states
         state_i = lax.cond(
-            valid_input_phase & (not self.frozen),
+            valid_input_phase & af_update_flag(self.update_mode, self.af.update.train, inner_i),
             lambda *_: self.af.update(self.inner_i, state_i, (fifo, *args))[0],
             lambda *_: state_i,
             )
@@ -164,12 +172,14 @@ class CPR(eqx.Module):
     state: PyTree
     af: PyTree = field(static=True)
     mode: str = field(static=True)
+    update_mode: Union[int, Schedule] = field(static=True)
 
-    def __init__(self, af=None, dims=1, i=0, mode="feedforward", state=None, af_kwds={}):
+    def __init__(self, af=None, dims=1, i=0, mode="feedforward", state=None, af_kwds={}, update_mode=1):
         self.i = jnp.asarray(i)
         self.af = _af.cpane_ekf(**af_kwds) if af is None else af
         self.state = self.af.init(dims=dims) if state is None else state
         self.mode = mode
+        self.update_mode = make_schedule(update_mode)
 
     def __call__(self, input):
         x, *args = astuple(input)
@@ -182,7 +192,11 @@ class CPR(eqx.Module):
         return cpr, output
 
     def update(self, input):
-        state, _ = self.af.update(self.i, self.state, input)
+        state = lax.cond(
+            af_update_flag(self.update_mode, self.af.update.train, self.i),
+            lambda *_: self.af.update(self.i, self.state, input)[0],
+            lambda *_: self.state,
+            )
         cpr = dc.replace(self, state=state, i=self.i+1)
         return cpr, None
 
