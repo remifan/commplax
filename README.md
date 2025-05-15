@@ -46,6 +46,7 @@ PMD layer:
 - [x] Distribution matcher (e.g. CCDM)
 - [ ] Probabilistic shaping
 - [ ] Standards-compliant FEC (e.g., CFEC, oFEC)
+
 Optical channel:
 - [ ] fiber/WSS/ROSA/TOSA/...
 
