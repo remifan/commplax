@@ -30,7 +30,7 @@ from jaxtyping import Array, Int, Float, PyTree
 
 Params = Any
 State = PyTree
-AFStep = Int
+AFStep = int
 AFInput = PyTree | Array
 AFState = Any
 
@@ -974,7 +974,7 @@ def foe_YanW(lr: Union[float, Schedule] = 1e-6):
 
     def apply(s, y):
         w, = s
-        N = x.shape[0]
+        N = y.shape[0]
         n = jnp.arange(N)
         return y * jnp.exp(-1j * w * n)
 

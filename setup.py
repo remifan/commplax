@@ -33,7 +33,6 @@ setup(name='commplax',
         'jaxlib',
         'equinox',
         'seaborn',
-        'quantumrandom',
     ],
     extras_require={
         'dev': [
