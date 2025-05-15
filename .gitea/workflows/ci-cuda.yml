@@ -1,0 +1,62 @@
+name: CI
+run-name: ${{ gitea.actor }} is building CI
+
+# on:
+#   push:
+#     branches:
+#       - main
+#   pull_request:
+#     branches:
+#       - main
+
+on: workflow_dispatch
+
+permissions:
+  contents: read  # to fetch code
+  actions: write  # to cancel previous workflows
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04_with-gpu
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    steps:
+      - name: Check Cuda
+        run: nvidia-smi
+      - uses: actions/checkout@v3
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Get pip cache dir
+        id: pip-cache
+        run: |
+          python -m pip install --upgrade pip wheel
+          echo "dir=$(pip cache dir)" >> $GITHUB_OUTPUT
+      - name: pip cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ steps.pip-cache.outputs.dir }}
+          key: ${{ runner.os }}-py${{ matrix.python-version }}-pip-${{ hashFiles('**/setup.py', '**/requirements.txt', '**/test-requirements.txt') }}
+      - name: Install Jax-GPU
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+      - name: test Jax-GPU
+        run: |
+          python -c 'from jax.lib import xla_bridge; print(xla_bridge.get_backend().platform)'
+          python -c 'import jax; print(jax.jit(jax.numpy.fft.fft)(jax.numpy.arange(10)))'
+      - name: Install rest dependencies
+        run: |
+          pip install -e '.[test]' 
+      - name: Test with pytest
+        run: |
+          pytest tests --doctest-modules --junitxml=junit/test-results-${{ matrix.python-version }}.xml --cov=. --cov-report=xml --cov-report=html
+      - name: Upload pytest test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: pytest-results-${{ matrix.python-version }}.xml
+          path: junit/test-results-${{ matrix.python-version }}.xml
+        # Use always() to always run this step to publish test results when there are test failures
+        if: ${{ always() }}

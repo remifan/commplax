@@ -29,11 +29,10 @@ setup(name='commplax',
     url='https://github.com/remifan/commplax',
     packages=find_packages(),
     install_requires=[
-        'jax>=0.2.13',
-        'jaxlib>=0.1.66',
-        'flax>=0.3.4',
+        'jax',
+        'jaxlib',
+        'equinox',
         'seaborn',
-        'quantumrandom'
     ],
     extras_require={
         'dev': [
@@ -48,6 +47,10 @@ setup(name='commplax',
             'zarr[jupyter]==2.9.5',
             's3fs',
             'fsspec'
+        ],
+        'test': [
+            'pytest',
+            'pytest-cov'
         ],
         'all': [
             'zarr[jupyter]==2.9.5',

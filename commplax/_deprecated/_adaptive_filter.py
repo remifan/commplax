@@ -16,73 +16,60 @@
 import jax
 import functools
 import numpy as np
-from typing import Any, TypeVar, Callable, Optional, Tuple, Union
+from typing import Any, Callable, NamedTuple, Optional, Tuple, Union
 from functools import partial
-from jax import numpy as jnp, vmap, jit, lax
-from commplax import comm, xop, cxopt
-from commplax.cxopt import make_schedule
+from jax import numpy as jnp, vmap, jit
+from commplax import comm, xcomm, xop, cxopt
 from jax.tree_util import tree_flatten, tree_unflatten
 from jax.lax import stop_gradient
 from commplax.cxopt import Schedule
-import dataclasses as dc
-from commplax.util import default_complexing_dtype, astuple
-from jaxtyping import Array, Int, Float, PyTree
 
+Array = Any
 Params = Any
-State = PyTree
-AFStep = int
-AFInput = PyTree | Array
+State = Any   # internal State
+Signal = Any # Gradient updates are of the same type as parameters
 AFState = Any
 
-InitFn = Callable[[Any], AFState]
-UpdateFn = Callable[[AFStep, AFState, AFInput], PyTree]
-ApplyFn = Callable[[AFState, AFInput], PyTree]
-
-@dc.dataclass
-class AdaptiveFilter():
-    init: InitFn = None
-    update: UpdateFn = None
-    apply: ApplyFn = None
-
-    def __iter__(self):
-        return iter((self.init, self.update, self.apply))
+Step = int
+InitFn = Callable
+UpdateFn = Callable[[Step, AFState, Signal], AFState]
+ApplyFn = Callable[[Any, Any], Any]
 
 
-C = TypeVar('C', bound=Callable)
+class AdaptiveFilter(NamedTuple):
+    init_fn: InitFn
+    update_fn: UpdateFn
+    eval_fn: ApplyFn
 
 
-def adaptive_filter(af_maker: C, trainable: bool=False, stop_grad_on_update: bool=True) -> C:
-    grad_handler = stop_gradient if stop_grad_on_update else lambda *args: args
+def adaptive_filter(af_maker: Callable, trainable=False):
     @functools.wraps(af_maker)
     def _af_maker(*args, **kwargs):
-        af_made = af_maker(*args, **kwargs)
-        init, update, apply = af_made
+        init, update, apply = af_maker(*args, **kwargs)
 
         @functools.wraps(init)
         def _init(*args, **kwargs):
             x0 = init(*args, **kwargs)
             return jax.device_put(x0)
 
+        # @jax.jit
         @functools.wraps(update)
         def _update(i, af_state, af_inp):
             if trainable:
                 af_inp = af_inp if isinstance(af_inp, tuple) else (af_inp,)
-                dims = af_inp[0].shape[-1]
-                dummy_zeros = jnp.zeros(dims)
-                af_inp = (af_inp + (dummy_zeros,))[:2] # stuff dummy values in absence of ground truth
+                af_inp = (af_inp + (0.,))[:2]
             else:
                 af_inp = af_inp[0] if isinstance(af_inp, tuple) else af_inp
-            af_inp = jax.device_put(af_inp) # uncommited
-            af_state = jax.device_put(af_state) # uncommited
-            af_state, af_out = grad_handler(update(i, af_state, af_inp))
+            af_inp = jax.device_put(af_inp)
+            af_state, af_out = stop_gradient(update(i, af_state, af_inp))
             return af_state, af_out
 
+        # @jax.jit
         @functools.wraps(apply)
         def _apply(af_ps, af_xs):
             return apply(af_ps, af_xs)
 
         _update.trainable = trainable
-        _update.train = getattr(update, 'train', cxopt.make_schedule(False))
 
         return AdaptiveFilter(_init, _update, _apply)
 
@@ -134,10 +121,10 @@ def frame(y, taps, sps, rtap=None):
 
 def iterate(update: UpdateFn,
             state: AFState,
-            signal: AFInput,
+            signal: Signal,
             truth=None,
-            # truth_ndim=2,
-            step0: AFStep=None,
+            truth_ndim=2,
+            step0: Step=None,
             device=None):
     _step0 = 0 if step0 is None else step0
     steps = _step0 + jnp.arange(signal.shape[0])
@@ -219,20 +206,18 @@ def mimozerodelaypads(taps, sps=2, rtap=None):
     return filterzerodelaypads(taps, sps, rtap)
 
 
-def mimoinitializer(taps, dims, dtype=None, initkind='centralspike', nspike=1):
-    dtype = default_complexing_dtype() if dtype is None else dtype
+def mimoinitializer(taps, dims, dtype, initkind):
     if np.isscalar(taps):
-        match initkind.lower():
-            case "zeros":
-                w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
-            case "centralspike":
-                w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
-                ctap = (taps + 1) // 2 - 1 
-                ctaps = jnp.arange(ctap - nspike//2, ctap + (nspike+1)//2)
-                for i in ctaps:
-                    w0 = w0.at[np.arange(dims), np.arange(dims), i].set(1.)
-            case _:
-                raise ValueError('invalid initkind %s' % initkind)
+        initkind = initkind.lower()
+        if initkind == 'zeros':
+            w0 = jnp.zeros((dims, dims, taps), dtype=dtype)
+        elif initkind == 'centralspike':
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+            w0 = jnp.array(w0)
+        else:
+            raise ValueError('invalid initkind %s' % initkind)
     else:
         w0 = jnp.asarray(taps, dtype=dtype)
     return w0
@@ -243,30 +228,16 @@ def decision(const, v, stopgrad=True):
     """
     if v.ndim > 1:
         raise ValueError(f'ndim = 1 is expected, but got {v.ndim} instead')
-    v = jnp.atleast_1d(v)
     i = jnp.argmin(jnp.abs(const[:, None] - v[None, :]), axis=0)
     d = const[i]
     return stop_gradient(d) if stopgrad else d
-
-
-def partition_QAM(x, slicers=None):
-    is_scalar = jnp.isscalar(x)
-    x = jnp.atleast_1d(x)
-    if slicers is None:
-        radii = jnp.sqrt(jnp.array([2, 10, 18]) / 10) # normalized 16-QAM
-        slicers = (radii[1:] + radii[:-1]) / 2
-    groups = jnp.sum(jnp.abs(x)[:, None] > slicers[None, :], axis=1)
-    groups = jnp.squeeze(groups) if is_scalar else groups
-    return groups
 
 
 @partial(adaptive_filter, trainable=True)
 def lms(
     lr: Union[float, Schedule] = 1e-3,
     train: Union[bool, Schedule] = False,
-    const: Optional[Array]=None,
-    norm: bool=True,
-    tap_leakage: float = 0.,
+    const: Optional[Array]=comm.const('16QAM', norm=True)
 ) -> AdaptiveFilter:
     """LMS MIMO adaptive filter.
 
@@ -277,16 +248,17 @@ def lms(
     Returns:
       an ``AdaptiveFilter`` object
     """
-    α = make_schedule(lr)
-    β = tap_leakage
-    σ = 1e-5
-    train = make_schedule(train)
-    const = jnp.asarray(comm.const('16QAM', norm=True)) if const is None else const
+    lr = cxopt.make_schedule(lr)
+    train = cxopt.make_schedule(train)
+    if const is not None:
+        const = jnp.asarray(const)
 
-    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike')
-        s0 = w0,
-        return s0
+    def init(w0=None, taps=19, dims=2, dtype=const.dtype):
+        if w0 is None:
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+        return w0.astype(dtype)
 
     def loss_fn(w, inp, i):
         u, x = inp
@@ -295,98 +267,223 @@ def lms(
         loss = jnp.sum(jnp.abs(d - v)**2)
         return loss
 
-    def update(i, s, inp):
-        w, = s
-        u = inp[0]
+    def update(i, w, inp):
         l, g = jax.value_and_grad(loss_fn)(w, inp, i)
         out = (w, l)
-        if norm:
-            μ = α(i) * 1 / (σ + jnp.sum(jnp.abs(u)**2, axis=0))[:, None, None]
-        else:
-            μ = α(i)
-        w = (1-μ*β) * w - μ * g.conj()
-        s = w,
-        return s, out
+        w = w - lr(i) * g.conj()
+        return w, out
 
-    def apply(s, y):
-        w = tuple(s)[0]
-        return mimo(w, y)
-
-    update.train = train
+    def apply(ws, yf):
+        return vmimo(ws, yf)
 
     return AdaptiveFilter(init, update, apply)
 
 
-@partial(adaptive_filter, trainable=True)
-def rls_lms(
-    λ: Union[float, Schedule] = 0.999,
-    δ: float = 0.01,
-    train: Union[bool, Schedule] = False,
-    const: Optional[Array]=None,
+@adaptive_filter
+def cma(
+    lr: Union[float, Schedule] = 1e-4,
+    R2: Optional[float]=1.32,
+    const: Optional[Array]=None
 ) -> AdaptiveFilter:
-    """LMS MIMO adaptive filter.
+    """CMA blind MIMO adaptive filter.
 
     Args:
       lr: Optional; learning rate
+      R2: Optional; reference square of radius
       const: Optional; constellation used to infer R2 when R2 is None
 
     Returns:
       an ``AdaptiveFilter`` object
+
+    Examples:
+      >>> from commplax.adaptive_filter import cma
+      >>>
+      >>> af = cma(lr=1e-4, R2=1.32) # for non-PS power normalized 16QAM signal
+
+    References:
+      - [1] D. Godard, “Self-recovering equalization and carrier tracking in two-dimensional data
+        communication systems,” IEEE Trans. Commun., vol. 28, no. 11, pp. 1867-1875, Nov. 1980.
+      - [2] K. Kikuchi, “Polarization-demultiplexing algorithm in the digital coherent receiver,”
+        in Proc. Digest 2008 IEEE/LEOS Summer Topical Meetings, Jul., pp. 101-102.
     """
-    _λ = cxopt.make_schedule(λ)
-    train = cxopt.make_schedule(train)
-    const = jnp.asarray(comm.const('16QAM', norm=True)) if const is None else const
+    lr = cxopt.make_schedule(lr)
 
-    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
-        P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
-        s0 = (w0, P0)
-        return s0
+    if const is not None:
+        R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
 
-    @partial(jax.vmap, in_axes=(None, 0, (None, 0)), out_axes=(0, -1))
-    def update(i, s, inp):
-        w, _P = s
-        u, x = inp
-        N, dims = u.shape[0], w.shape[0]
-        # in case of polyphase filtering, P is cropped
-        i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
-        P = _P[i_P]
+    def init(w0=None, taps=19, dims=2, dtype=np.complex64):
+        if w0 is None:
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+        return w0.astype(dtype)
 
-        u, x = inp
-        u_i = u.reshape(-1, order='F')[:, None]
-        h = w.conj().reshape(-1)[:, None]
-        λ = _λ(i)
+    def loss_fn(w, u):
+        v = r2c(mimo(w, u))
+        loss = jnp.sum(jnp.abs(R2 - jnp.abs(v)**2))
+        return loss
 
-        k = 1/λ * P @ u_i / (1 + 1/λ * u_i.conj().T @ P @ u_i)
-        v = jnp.squeeze(h.conj().T @ u_i)
-        d = jnp.where(train(i), x, decision(const, v))
-        ε = d - v
-        h = h + k * ε.conj()
-        P = 1/λ * P - 1/λ * k * u_i.conj().T @ P
+    def update(i, w, u):
+        l, g = jax.value_and_grad(loss_fn)(w, u)
+        out = (w, l)
+        w = w - lr(i) * g.conj()
+        return w, out
 
-        dims = w.shape[0]
-        w = h.conj().reshape((dims, -1))
+    def apply(ws, yf):
+        return vmimo(ws, yf)
 
-        _P = _P.at[i_P].set(P)
-        s = w, _P
-        out = (ε, v)
-        return s, out
+    return AdaptiveFilter(init, update, apply)
 
-    def apply(s, y):
-        w = astuple(s)[0]
-        return mimo(w, y)
 
-    update.train = train
+@adaptive_filter
+def mucma(
+    dims: int = 2,
+    lr: Union[float, Schedule] = 1e-4,
+    R2: Union[float, Schedule] = 1.32,
+    delta: int = 6,
+    beta: float = 0.999,
+    const: Optional[Array] = None
+) -> AdaptiveFilter:
+    """Multiuser CMA - Singularity-free blind MIMO equalizer
+    
+    Args:
+      dims: dimension of input signal
+      lr: learning rate
+      R2: reference squared radius
+      delta: the number of symbols used in evaluating the cross-correlation
+      beta: smoothing factor of exponential moving everage
+      const: Optional; constellation used to infer R2 when R2 is None
+      
+    Returns:
+      an ``AdaptiveFilter`` object
+
+    References:
+      - [1] Papadias, Constantinos B., and Arogyaswami J. Paulraj. "A constant modulus algorithm
+        for multiuser signal separation in presence of delay spread using antenna arrays."
+        IEEE signal processing letters 4.6 (1997): 178-181.
+      - [2] Vgenis, Athanasios, et al. "Nonsingular constant modulus equalizer for PDM-QPSK coherent
+        optical receivers." IEEE Photonics Technology Letters 22.1 (2009): 45-47.
+    """
+    lr = cxopt.make_schedule(lr)
+
+    if const is not None:
+        R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
+
+    def init(w0=None, taps=19, dtype=np.complex64):
+        if w0 is None:
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+
+        w0 = jnp.asarray(w0).astype(dtype)
+        z = jnp.zeros((delta, dims), dtype=dtype)
+        r = jnp.zeros((dims, dims, delta), dtype=dtype)
+        return w0, z, r, jnp.asarray(beta)
+
+    def update(i, state, u):
+        w, z, r, betapow = state
+        z = jnp.concatenate((mimo(w, u)[None, :], z[:-1, :])) #TODO: c2r?
+        z0 = jnp.repeat(z, dims, axis=-1)
+        z1 = jnp.tile(z, (1, dims))
+        rt = jax.vmap(lambda a, b: a[0] * b.conj(), in_axes=-1, out_axes=0)(z0, z1).reshape(r.shape)
+        r = beta * r + (1 - beta) * rt # exponential moving average
+        rhat = r / (1 - betapow) # bias correction due to small beta
+        r_sqsum = jnp.sum(jnp.abs(rhat)**2, axis=-1)
+
+        v = mimo(w, u)
+        lcma = jnp.sum(jnp.abs(jnp.abs(v)**2 - R2)**2)
+        lmu = 2 * (jnp.sum(r_sqsum) - jnp.sum(jnp.diag(r_sqsum)))
+        gcma = 4 * (v * (jnp.abs(v)**2 - R2))[..., None, None] * jnp.conj(u).T[None, ...]
+        gmu_tmp_full = (4 * rhat[..., None, None]
+                        * z.T[None, ..., None, None]
+                        * jnp.conj(u).T[None, None, None, ...]) # shape: [dims, dims, delta, dims, T]
+        # reduce delta axis first
+        gmu_tmp_dr = jnp.sum(gmu_tmp_full, axis=2) # shape: [dims, dims, dims, T]
+        # cross correlation = full correlation - self correlation
+        gmu = jnp.sum(gmu_tmp_dr, axis=1) - gmu_tmp_dr[jnp.arange(dims), jnp.arange(dims), ...]
+        l = lcma + lmu
+        g = gcma + gmu
+
+        out = (w, l)
+        w = w - lr(i) * g
+        betapow *= beta
+        state = (w, z, r, betapow)
+        return state, out
+
+    def apply(ws, yf):
+        return vmimo(ws, yf)
 
     return AdaptiveFilter(init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)
-def lms_MoriY(
-    lr_w: Union[float, Schedule] = 1/2**5,
-    lr_f: Union[float, Schedule] = 1/2**6,
+def rde(
+    lr: Union[float, Schedule] = 2**-15,
+    train: Union[bool, Schedule] = False,
+    Rs: Array = np.unique(np.abs(comm.const("16QAM", norm=True))),
+    const: Optional[Array] = None
+) -> AdaptiveFilter:
+    """Radius Directed adaptive Equalizer
+
+    Args:
+      lr: learning rate. scalar or Schedule
+      train: schedule training mode, which can be a bool for global control within one call
+        or an array of bool to swich training on iteration basis
+      Rs: the radii of the target constellation
+      const: Optional; constellation used to infer R2 when R2 is None
+
+    Returns:
+      an ``AdaptiveFilter`` object
+
+    References:
+      - [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
+        carrier phase recovery in a 16-QAM optical coherent system. Journal
+        of lightwave technology, 27(15), pp.3042-3049.
+    """
+    lr = cxopt.make_schedule(lr)
+    train = cxopt.make_schedule(train)
+
+    if const is not None:
+        Rs = jnp.array(jnp.unique(jnp.abs(const)))
+    else:
+        Rs = jnp.array(Rs)
+
+    def init(dims=2, w0=None, taps=32, dtype=np.complex64):
+        if w0 is None:
+            w0 = np.zeros((dims, dims, taps), dtype=dtype)
+            ctap = (taps + 1) // 2 - 1
+            w0[np.arange(dims), np.arange(dims), ctap] = 1.
+        return w0
+
+    def loss_fn(w, u, x, i):
+        v = r2c(mimo(w, u))[None,:]
+        R2 = jnp.where(train(i),
+                       jnp.abs(x)**2,
+                       Rs[jnp.argmin(
+                           jnp.abs(Rs[:,None] * v / jnp.abs(v) - v),
+                           axis=0)]**2)
+        l = jnp.sum(jnp.abs(R2 - jnp.abs(v[0,:])**2))
+        return l
+
+    def update(i, w, inp):
+        u, x = inp
+        l, g = jax.value_and_grad(loss_fn)(w, u, x, i)
+        out = (w, l)
+        w = w - lr(i) * g.conj()
+        return w, out
+
+    def apply(ws, yf):
+        return vmimo(ws, yf)
+
+    return AdaptiveFilter(init, update, apply)
+
+
+@partial(adaptive_filter, trainable=True)
+def ddlms(
+    lr_w: Union[float, Schedule] = 1/2**4,
+    lr_f: Union[float, Schedule] = 1/2**7,
     lr_s: Union[float, Schedule] = 0.,
-    lr_b: Union[float, Schedule] = 1/2**10,
+    lr_b: Union[float, Schedule] = 1/2**7,
     train: Union[bool, Schedule] = False,
     grad_max: Tuple[float, float] = (30., 30.),
     eps: float = 1e-8,
@@ -420,20 +517,19 @@ def lms_MoriY(
         amplitude modulation signals. Optics express, 20(24), pp.26236-26251.
     """
     const = jnp.asarray(const)
-    lr_w = make_schedule(lr_w)
-    lr_f = make_schedule(lr_f)
-    lr_s = make_schedule(lr_s)
-    lr_b = make_schedule(lr_b)
-    train = make_schedule(train)
+    lr_w = cxopt.make_schedule(lr_w)
+    lr_f = cxopt.make_schedule(lr_f)
+    lr_s = cxopt.make_schedule(lr_s)
+    lr_b = cxopt.make_schedule(lr_b)
+    train = cxopt.make_schedule(train)
 
-    def init(taps=32, dims=2, dtype=default_complexing_dtype(), nspike=1, w0=None):
-        w0 = mimoinitializer(taps, dims, dtype, 'zeros') if w0 is None else w0
-        cplx = default_complexing_dtype()
-        _dims = dims if jnp.iscomplexobj(w0) else dims // 2
-        f0 = jnp.full((_dims,), 1., dtype=cplx)
-        s0 = jnp.full((_dims,), 1., dtype=cplx)
-        b0 = jnp.full((_dims,), 0., dtype=cplx)
-        fshat0 = jnp.full((_dims,), 1., dtype=cplx)
+    def init(taps=32, dims=2, dtype=jnp.complex64, mimoinit='zeros'):
+        w0 = mimoinitializer(taps, dims, dtype, mimoinit)
+        cplx_type = jnp.complex64 #TODO make this inference
+        f0 = jnp.full((2,), 1., dtype=cplx_type)
+        s0 = jnp.full((2,), 1., dtype=cplx_type)
+        b0 = jnp.full((2,), 0., dtype=cplx_type)
+        fshat0 = jnp.full((2,), 1., dtype=cplx_type)
         return (w0, f0, s0, b0, fshat0)
 
     def update(i, state, inp):
@@ -478,388 +574,23 @@ def lms_MoriY(
 
         return state, out
 
-    def apply(state, y):
-        w, f, s, b = state[:4]
-        res = r2c(mimo(w, y)) * f * s + b
-        return c2r(res) if not jnp.iscomplexobj(w) else res
-
-    update.train = train
-
-    return AdaptiveFilter(init, update, apply)
-
-
-@adaptive_filter
-def cma(
-    lr: Union[float, Schedule] = 0.03,
-    R2: Optional[float]=1.32,
-    const: Optional[Array]=None,
-    norm: bool=True,
-    leakage_params: tuple=(1., 4., 200, 1, 3),
-):
-    """CMA blind MIMO adaptive filter.
-
-    Args:
-      lr: Optional; learning rate
-      R2: Optional; reference square of radius
-      const: Optional; constellation used to infer R2 when R2 is None
-
-    Returns:
-      an ``AdaptiveFilter`` object
-
-    Examples:
-      >>> from commplax.adaptive_filter import cma
-      >>>
-      >>> af = cma(lr=1e-4, R2=1.32) # for non-PS power normalized 16QAM signal
-
-    Notes:
-      leakage factor: prevent tap build-up and to provide out-of-band Spectral Shaping in order to
-        reject the out-of-band noise and minimize adjacent channel interference.
-
-    References:
-      - [1] D. Godard, “Self-recovering equalization and carrier tracking in two-dimensional data
-        communication systems,” IEEE Trans. Commun., vol. 28, no. 11, pp. 1867-1875, Nov. 1980.
-      - [2] K. Kikuchi, “Polarization-demultiplexing algorithm in the digital coherent receiver,”
-        in Proc. Digest 2008 IEEE/LEOS Summer Topical Meetings, Jul., pp. 101-102.
-      - [3] Jones, Douglas L. "A normalized constant-modulus algorithm." Conference Record of the
-        Twenty-Ninth Asilomar Conference on Signals, Systems and Computers. Vol. 1. IEEE, 1995.
-      - [4] Kamenetsky, Max, and Bernard Widrow. "A variable leaky LMS adaptive algorithm." 
-        Conference Record of the Thirty-Eighth Asilomar Conference on Signals, Systems and Computers,
-        2004.. Vol. 1. IEEE, 2004.
-    """
-    α = make_schedule(lr)
-    γ_max, β, M, lu, ld = leakage_params
-    γ = lambda m: γ_max * jnp.power(m / M, β)
-    σ = 1e-5
-
-    if const is not None:
-        R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
-    R1 = jnp.sqrt(R2)
-
-    def init(taps=19, dims=2, dtype=np.complex64, nspike=1, w0=None):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike) if w0 is None else w0
-        m0 = 1 # small value of leak, see [4]
-        s0 = (w0, m0)
-        return s0
-
-    def loss_fn(w, u):
-        v = r2c(mimo(w, u))
-        v2 = jnp.abs(v)**2
-        loss = jnp.sum(jnp.abs(R2 - v2)**2)
-        return loss
-
-    def update(i, s, u):
-        w, m = s
-        l, g = jax.value_and_grad(loss_fn)(w, u)
-
-        if norm: # see [3]
-            # normalzied CMA
-            v = mimo(w, u)
-            v1 = jnp.abs(v)
-            v2 = v1**2
-            E = jnp.sum(jnp.abs(u)**2, axis=0)
-            μ = α(i) * ((v2 - R1 * v1) / (4 * v2 * (v2 - R2) * E + σ))[:, None, None]
-        else:
-            μ = α(i)
-
-        # compare the posteriori errors for leakage adjustment, see [4]
-        _w = (1 - μ) * w - μ * g.conj()
-        w = (1 - μ * γ(m)) * w - μ * g.conj()
-        m = lax.select(
-            loss_fn(w, u) < loss_fn(_w, u),
-            lax.min(m + lu, M),
-            lax.max(m - ld, 0),
-        )
-
-        s = (w, m)
-        out = (w, l)
-        return s, out
-
-    def apply(s, y):
-        w = tuple(s)[0]
-        return mimo(w, y)
-
-    return AdaptiveFilter(init, update, apply)
-
-
-@adaptive_filter
-def rls_cma(
-    λ: Union[float, Schedule] = 0.999,
-    δ: float = 0.01,
-    R2: Optional[float]=1.32,
-    const: Optional[Array]=None
-) -> AdaptiveFilter:
-    """RLS-CMA blind MIMO adaptive filter.
-    λ: forgetting factor (λ<1)
-    δ: is small positive number
-    [1] Md. S. Faruk and S. J. Savory, “Digital Signal Processing for
-     Coherent Transceivers Employing Multilevel Formats,” J. Lightwave
-     Technol., vol. 35, no. 5, pp. 1125-1141, Mar. 2017, doi: 10.1109/JLT.2017.2662319.
-
-    """
-    _λ = cxopt.make_schedule(λ)
-
-    if const is not None:
-        R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
-
-    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike) if w0 is None else w0
-        P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
-        return (w0, P0)
-
-    @partial(jax.vmap, in_axes=(None, 0, None), out_axes=(0, -1))
-    def update(i, s, u):
-        w, _P = s
-        N, dims = u.shape[0], w.shape[0]
-        # in case of polyphase filtering, P is downsized
-        i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
-        P = _P[i_P]
-
-        u_i = u.reshape(-1, order='F')[:, None]
-        h = w.conj().reshape(-1)[:, None]
-        λ = _λ(i)
-
-        z = u_i @ u_i.conj().T @ h
-        k = 1/λ * P @ z / (1 + 1/λ * z.conj().T @ P @ z)
-        v = h.conj().T @ z
-        ε = jnp.squeeze(R2 - v)
-        h = h + k * ε.conj()
-        P = 1/λ * P - 1/λ * k * z.conj().T @ P
-
-        w = h.conj().reshape((dims, -1))
-
-        _P = _P.at[i_P].set(P)
-        s = w, _P
-        out = (ε,)
-        return s, out
-
-    def apply(s, y):
-        w = tuple(s)[0]
-        return mimo(w, y)
-
-    return AdaptiveFilter(init, update, apply)
-
-
-@adaptive_filter
-def mu_cma(
-    lr: Union[float, Schedule] = 1e-4,
-    R2: Union[float, Schedule] = 1.32,
-    delta: int = 6,
-    beta: float = 0.999,
-    const: Optional[Array] = None
-) -> AdaptiveFilter:
-    """Multiuser CMA - Singularity-free blind MIMO equalizer
-    
-    Args:
-      dims: dimension of input signal
-      lr: learning rate
-      R2: reference squared radius
-      delta: the number of symbols used in evaluating the cross-correlation
-      beta: smoothing factor of exponential moving everage
-      const: Optional; constellation used to infer R2 when R2 is None
-      
-    Returns:
-      an ``AdaptiveFilter`` object
-
-    References:
-      - [1] Papadias, Constantinos B., and Arogyaswami J. Paulraj. "A constant modulus algorithm
-        for multiuser signal separation in presence of delay spread using antenna arrays."
-        IEEE signal processing letters 4.6 (1997): 178-181.
-      - [2] Vgenis, Athanasios, et al. "Nonsingular constant modulus equalizer for PDM-QPSK coherent
-        optical receivers." IEEE Photonics Technology Letters 22.1 (2009): 45-47.
-    """
-    lr = cxopt.make_schedule(lr)
-
-    if const is not None:
-        R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
-
-    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
-        z0 = jnp.zeros((delta, dims), dtype=dtype)
-        r0 = jnp.zeros((dims, dims, delta), dtype=dtype)
-        beta_ = jnp.asarray(beta)
-        s0 = (w0, z0, r0, beta_)
-        return s0 
-
-    def update(i, state, u):
-        dims = u.shape[1]
-        w, z, r, betapow = state
-        z = jnp.concatenate((mimo(w, u)[None, :], z[:-1, :])) #TODO: c2r?
-        z0 = jnp.repeat(z, dims, axis=-1)
-        z1 = jnp.tile(z, (1, dims))
-        rt = jax.vmap(lambda a, b: a[0] * b.conj(), in_axes=-1, out_axes=0)(z0, z1).reshape(r.shape)
-        r = beta * r + (1 - beta) * rt # exponential moving average
-        rhat = r / (1 - betapow) # bias correction due to small beta
-        r_sqsum = jnp.sum(jnp.abs(rhat)**2, axis=-1)
-
-        v = mimo(w, u)
-        lcma = jnp.sum(jnp.abs(jnp.abs(v)**2 - R2)**2)
-        lmu = 2 * (jnp.sum(r_sqsum) - jnp.sum(jnp.diag(r_sqsum)))
-        gcma = 4 * (v * (jnp.abs(v)**2 - R2))[..., None, None] * jnp.conj(u).T[None, ...]
-        gmu_tmp_full = (4 * rhat[..., None, None]
-                        * z.T[None, ..., None, None]
-                        * jnp.conj(u).T[None, None, None, ...]) # shape: [dims, dims, delta, dims, T]
-        # reduce delta axis first
-        gmu_tmp_dr = jnp.sum(gmu_tmp_full, axis=2) # shape: [dims, dims, dims, T]
-        # cross correlation = full correlation - self correlation
-        gmu = jnp.sum(gmu_tmp_dr, axis=1) - gmu_tmp_dr[jnp.arange(dims), jnp.arange(dims), ...]
-        l = lcma + lmu
-        g = gcma + gmu
-
-        out = (w, l)
-        w = w - lr(i) * g
-        betapow *= beta
-        state = (w, z, r, betapow)
-        return state, out
-
-    def apply(s, y):
-        w = tuple(s)[0]
-        return mimo(w, y)
-
-    return AdaptiveFilter(init, update, apply)
-
-
-@partial(adaptive_filter, trainable=True)
-def rde(
-    lr: Union[float, Schedule] = 2**-15,
-    train: Union[bool, Schedule] = False,
-    Rs: Array = jnp.array([0.4472136 , 1., 1.34164079]),
-    const: Optional[Array] = None
-) -> AdaptiveFilter:
-    """Radius Directed adaptive Equalizer
-
-    Args:
-      lr: learning rate. scalar or Schedule
-      train: schedule training mode, which can be a bool for global control within one call
-        or an array of bool to swich training on iteration basis
-      Rs: the radii of the target constellation
-      const: Optional; constellation used to infer R2 when R2 is None
-
-    Returns:
-      an ``AdaptiveFilter`` object
-
-    References:
-      - [1] Fatadin, I., Ives, D. and Savory, S.J., 2009. Blind equalization and
-        carrier phase recovery in a 16-QAM optical coherent system. Journal
-        of lightwave technology, 27(15), pp.3042-3049.
-    """
-    lr = cxopt.make_schedule(lr)
-    train = cxopt.make_schedule(train)
-
-    if const is not None:
-        Rs = jnp.array(jnp.unique(jnp.abs(const)))
-    else:
-        Rs = jnp.array(Rs)
-
-    def init(dims=2, w0=None, taps=32, dtype=default_complexing_dtype(), nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
-        s0 = w0,
-        return s0
-
-    def loss_fn(w, u, x, i):
-        v = r2c(mimo(w, u))[None,:]
-        R2 = jnp.where(train(i),
-                       jnp.abs(x)**2,
-                       Rs[jnp.argmin(
-                           jnp.abs(Rs[:,None] * v / jnp.abs(v) - v),
-                           axis=0)]**2)
-        l = jnp.sum(jnp.abs(R2 - jnp.abs(v[0,:])**2))
-        return l
-
-    def update(i, s, inp):
-        w, = s
-        u, x = inp
-        l, g = jax.value_and_grad(loss_fn)(w, u, x, i)
-        out = (w, l)
-        w = w - lr(i) * g.conj()
-        s = w,
-        return s, out
-
-    def apply(s, y):
-        w = tuple(s)[0]
-        return mimo(w, y)
-
-    update.train = train
-
-    return AdaptiveFilter(init, update, apply)
-
-
-@partial(adaptive_filter, trainable=True)
-def rls_rde(
-    λ: Union[float, Schedule] = 0.999,
-    δ: float = 0.01,
-    train: Union[bool, Schedule] = False,
-    Rs: Array = jnp.array([0.4472136 , 1., 1.34164079]),
-    const: Optional[Array]=None
-) -> AdaptiveFilter:
-    """RLS-RDE blind MIMO adaptive filter.
-    λ: forgetting factor (λ<1)
-    δ: is small positive number
-    [1] Md. S. Faruk and S. J. Savory, “Digital Signal Processing for
-     Coherent Transceivers Employing Multilevel Formats,” J. Lightwave
-     Technol., vol. 35, no. 5, pp. 1125-1141, Mar. 2017, doi: 10.1109/JLT.2017.2662319.
-
-    """
-    _λ = cxopt.make_schedule(λ)
-    train = cxopt.make_schedule(train)
-
-    if const is not None:
-        Rs = jnp.asarray(jnp.unique(jnp.abs(const)))
-    else:
-        Rs = jnp.asarray(Rs)
-
-    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
-        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike) if w0 is None else w0
-        P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
-        return (w0, P0)
-
-    @partial(jax.vmap, in_axes=(None, 0, (None, 0)), out_axes=(0, -1))
-    def update(i, s, inp):
-        w, _P = s
-        u, x = inp
-        N, dims = u.shape[0], w.shape[0]
-        # in case of polyphase filtering, P is downsized
-        i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
-        P = _P[i_P]
-
-        u_i = u.reshape(-1, order='F')[:, None]
-        h = w.conj().reshape(-1)[:, None]
-        λ = _λ(i)
-
-        z = u_i @ u_i.conj().T @ h
-        k = 1/λ * P @ z / (1 + 1/λ * z.conj().T @ P @ z)
-        vs = jnp.sqrt(jnp.abs(jnp.squeeze(h.conj().T @ z)))
-        R2 = jnp.where(train(i),
-                       jnp.abs(x)**2,
-                       Rs[jnp.argmin(jnp.abs(Rs - vs))]**2)
-        ε = R2 - vs**2
-        h = h + k * ε.conj()
-        P = 1/λ * P - 1/λ * k * z.conj().T @ P
-
-        w = h.conj().reshape((dims, -1))
-
-        _P = _P.at[i_P].set(P)
-        s = w, _P
-        out = (ε,)
-        return s, out
-
-    def apply(s, y):
-        w = tuple(s)[0]
-        return mimo(w, y)
-
-    update.train = train
+    def apply(ps, yf):
+        ws, fs, ss, bs = ps
+        res = vr2c(vmimo(ws, yf)) * fs * ss + bs
+        return vc2r(res) if not jnp.iscomplexobj(yf) else res
 
     return AdaptiveFilter(init, update, apply)
 
 
 @partial(adaptive_filter, trainable=True)
 def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
-                                       [0, 1e-6]]), # 1e-8 is better if akf is False
+                                       [0, 1e-9]]), # 1e-8 is better if akf is False
                  R: Array = jnp.array([[1e-2, 0],
                                        [0, 1e-3]]),
                  const: Array = comm.const("16QAM", norm=True),
                  train: Union[bool, Schedule] = False,
-                 akf: Union[bool, Schedule] = False,
-                 alpha: float = 0.98) -> AdaptiveFilter:
+                 akf: Schedule = cxopt.piecewise_constant([10, 500], [False, True, False]),
+                 alpha: float = 0.999) -> AdaptiveFilter:
     """Block based estimator of carrier frequency offset
 
     frame-by-frame coarse carrier phsae recovery using Kalman filter, can tolerate 0.1 * baudrate
@@ -935,52 +666,6 @@ def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
     return AdaptiveFilter(init, update, apply)
 
 
-@partial(adaptive_filter)
-def foe_YanW(lr: Union[float, Schedule] = 1e-6):
-    '''
-    Wang, Yan, Erchin Serpedin, and Philippe Ciblat. "Optimal blind nonlinear 
-    least-squares carrier phase and frequency offset estimation for general QAM 
-    modulations." IEEE Transactions on wireless communications 2.5 (2003): 1040-1054.
-    '''
-    lr = cxopt.make_schedule(lr)
-
-    def F(x):
-        y = jnp.piecewise(
-            x,
-            [x < 0.7236, x >= 1.1708],
-            # [lambda x: 122.2733 * x, lambda x: 331.885 * x - 30.4524, 0.]
-            [lambda x: 0.36 * x, lambda x: x - 0.09, 0.]
-            )
-        return y
-
-    def init(w0=0.):
-        s0 = jnp.asarray(w0*4),
-        return s0
-
-    def loss(w, x):
-        N = x.shape[0]
-        n = jnp.arange(N)
-        y = F(jnp.abs(x)) * jnp.exp(4j*jnp.angle(x))
-        l = -jnp.abs((y * jnp.exp(-1j*w*n)).sum())**2 / N
-        return l
-
-    def update(i, s, x):
-        w, = s
-        l, g = jax.value_and_grad(loss)(w, x)
-        out = (w / 4, l)
-        w = w - lr(i) * g
-        s = w,
-        return s, out
-
-    def apply(s, y):
-        w, = s
-        N = y.shape[0]
-        n = jnp.arange(N)
-        return y * jnp.exp(-1j * w * n)
-
-    return AdaptiveFilter(init, update, apply)
-
-
 @partial(adaptive_filter, trainable=True)
 def cpane_ekf(train: Union[bool, Schedule] = False,
               alpha: float = 0.99,
@@ -1014,12 +699,10 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
     const = jnp.asarray(const)
     train = cxopt.make_schedule(train)
 
-    def init(p0=0j, dims=1):
-        f = lambda x: jnp.full(dims, x)
-        state0 = (f(p0), f(1j), f(0j), f(Q), f(R))
+    def init(p0=0j):
+        state0 = (p0, 1j, 0j, Q, R)
         return state0
 
-    @partial(jax.vmap, in_axes=(None, -1, -1), out_axes=-1)
     def update(i, state, inp):
         Psi_c, P_c, Psi_a, Q, R = state
         y, x = inp
@@ -1049,12 +732,8 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
 
         return state, out
 
-    @partial(jax.vmap, in_axes=-1, out_axes=-1)
-    def apply(s, ys):
-        Psi = tuple(s)[0]
+    def apply(Psi, ys):
         return ys * jnp.exp(-1j * Psi)
-
-    update.train = train
 
     return AdaptiveFilter(init, update, apply)
 
@@ -1086,21 +765,21 @@ def anf(f0: float,
     """
     lr = cxopt.make_schedule(lr)
     T = 1 / sr
-    ω0 = 2 * np.pi * f0
+    w0 = 2 * np.pi * f0
 
-    def init(w0=None):
-        w0 = jnp.array([0., 0.], dtype=default_complexing_dtype()) if w0 is None else w0
-        state0 = w0,
+    def init(w0=jnp.array([0., 0.])):
+        state0 = (w0, 0)
         return state0
 
     def update(i, state, inp):
-        w, = state
+        w, i = state
         d = inp
-        x = jnp.array([A * np.cos(ω0 * i * T + phi), A * np.sin(ω0 * i * T + phi)])
+        x = jnp.array([A * np.cos(w0 * i * T + phi), A * np.sin(w0 * i * T + phi)])
         y = jnp.inner(w, x)
         e = d - y
         w += 2 * lr(i) * e * x
-        state = w,
+        i += 1
+        state = (w, i)
         return state, e
 
     def apply(es, ys):

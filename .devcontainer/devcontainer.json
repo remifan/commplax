@@ -1,0 +1,60 @@
+{
+  "name": "JAX",
+
+	"build": {
+		"dockerfile": "Dockerfile",
+    "context": ".",
+		"args": {
+      "JAX_VERSION": "cuda11_pip"
+    }
+	},
+
+  "runArgs": [
+    "--gpus=all"
+  ],
+
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": "true",
+      "username": "vscode",
+      "userUid": "1000",
+      "userGid": "1000",
+      "upgradePackages": "true"
+    },
+    "ghcr.io/devcontainers/features/git:1": {
+      "version": "latest",
+      "ppa": "false"
+    }
+  },
+
+  "updateContentCommand": "bash .devcontainer/install-dev-tools.sh",
+
+  "postCreateCommand": [
+    "nvidia-smi"
+  ],
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter",
+        "ms-toolsai.vscode-jupyter-cell-tags",
+        "ms-toolsai.jupyter-keymap",
+        "ms-toolsai.jupyter-renderers",
+        "ms-toolsai.vscode-jupyter-slideshow",
+        "ms-python.vscode-pylance"
+      ]
+    }
+  },
+
+  // Use 'forwardPorts' to make a list of ports inside the container available locally.
+  // "forwardPorts": [],
+
+  // Set `remoteUser` to `root` to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root.
+  "remoteUser": "vscode",
+
+  // "mounts": [
+  // "source=${localEnv:HOME}/Workspace/commplax_dev,target=/home/vscode/dev,type=bind,consistency=cached"
+  // ]
+}
+

@@ -17,9 +17,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import signal
+from scipy.cluster.vq import kmeans
 
 
-def glance(x):
+def glance(x, show_spectrum=True, show_waveform=True):
     x = np.asarray(x)
 
     if x.ndim > 1:
@@ -34,14 +35,23 @@ def glance(x):
     asp = lambda gs: fig.add_subplot(gs)
 
     for ch in range(nch):
-        pwelch(x[:,ch], ax=asp(gs[0, ch]))
-        waveform(x[:,ch], axes=[asp(gs[1, ch]), asp(gs[2, ch])])
+        if show_spectrum:
+            pwelch(x[:,ch], ax=asp(gs[0, ch]))
+        if show_waveform:
+            waveform(x[:,ch], axes=[asp(gs[1, ch]), asp(gs[2, ch])])
 
 
-def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None, dpi=100):
+def _const_optim(x, c):
+    u = np.stack([x.real, x.imag], axis=-1)
+    v = np.stack([c.real, c.imag], axis=-1)
+    codebook, distortion = kmeans(u, v, iter=50, thresh=1e-08)
+    const = codebook[:, 0] + 1j*codebook[:, 1]
+    return const
+
+def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None, const=None, dpi=100):
     signal = np.atleast_1d(signal)
-    if not np.iscomplex(signal).any():
-        raise ValueError(f'expect complex input, got {signal.dtype} instead')
+    # if not np.iscomplex(signal).all():
+    #     raise ValueError(f'expect complex input, got {signal.dtype} instead')
       
     if signal.ndim == 1:
       signal = signal[:, None]
@@ -64,6 +74,11 @@ def scatter(signal, kde=False, kdeopts={'fill': True, 'cmap':'Reds'}, title=None
             ax = sns.kdeplot(x=I, y=Q, ax=ax, **kdeopts)
         else:
             ax.scatter(I, Q, s=1)
+            if const is not None:
+                ax.scatter(const.real, const.imag, marker='x', color='red')
+                const_kmeans = _const_optim(x, const)
+                ax.scatter(const_kmeans.real, const_kmeans.imag, marker='+', color='black')
+                
 
         ax.set_aspect('equal')
 
@@ -144,3 +159,19 @@ def lpvssnr(LP, S, label=None, ax=None, show_std=True, show_ex=True):
     ax.set_ylabel('SNR (dB)')
 
 
+def filter_response(b):
+    w, h = signal.freqz(b)
+    fig, ax1 = plt.subplots()
+    ax1.set_title('Digital filter frequency response')
+
+    ax1.plot(w, 20 * np.log10(abs(h)), 'b')
+    ax1.set_ylabel('Amplitude [dB]', color='b')
+    ax1.set_xlabel('Frequency [rad/sample]')
+
+    ax2 = ax1.twinx()
+    angles = np.unwrap(np.angle(h))
+    ax2.plot(w, angles, 'g')
+    ax2.set_ylabel('Angle (radians)', color='g')
+    ax2.grid(True)
+    ax2.axis('tight')
+    plt.show()

@@ -12,9 +12,9 @@ Commplax adaptive filter
   :toctree: _autosummary
 
     cma
-    mucma
+    mu_cma
     rde
-    ddlms
+    lms_MoriY
     frame_cpr_kf
     cpane_ekf
     anf

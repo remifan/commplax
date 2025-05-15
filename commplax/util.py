@@ -18,11 +18,28 @@ import os
 import jax
 from jax.tree_util import tree_map, tree_flatten, tree_unflatten, tree_structure, treedef_is_leaf
 from jax.interpreters import xla
+from jax import numpy as jnp
 from commplax.third_party import namedtuple_pprint
 from functools import partial, update_wrapper
-from flax.traverse_util import flatten_dict, unflatten_dict
-from flax.core import freeze, unfreeze
-from flax import serialization
+from collections.abc import Iterable
+
+
+def default_floating_dtype():
+    if jax.config.jax_enable_x64:  # pyright: ignore
+        return jnp.float64
+    else:
+        return jnp.float32
+
+
+def default_complexing_dtype():
+    if jax.config.jax_enable_x64:  # pyright: ignore
+        return jnp.complex128
+    else:
+        return jnp.complex64
+
+
+def astuple(x):
+    return tuple(x) if (isinstance(x, tuple) or isinstance(x, list)) else (x,)
 
 
 def getdev(x):
@@ -76,38 +93,6 @@ def wrapped_partial(func, *args, **kwargs):
     return partial_func
 
 
-def dict_split(d, paths, fullmatch=True):
-    match = re.fullmatch if fullmatch else re.match
-    flat_d = flatten_dict(unfreeze(d))
-    matched = []
-    for p in paths:
-        for k in flat_d.keys():
-            if len(p) <= len(k) and all(
-                    map(lambda a, b: bool(match(a, b)), p, k[:len(p)])):
-                matched.append(k)
-    x = {}
-    y = {}
-    for k, v in flat_d.items():
-        if k in matched:
-            x[k] = v
-        else:
-            y[k] = v
-    return freeze(unflatten_dict(x)), freeze(unflatten_dict(y))
-
-
-def dict_merge(x, y):
-    flat_x = flatten_dict(unfreeze(x))
-    flat_y = flatten_dict(unfreeze(y))
-    flat_z = {**flat_x, **flat_y}
-    return freeze(unflatten_dict(flat_z))
-
-
-def dict_map(f, d, paths=[]):
-    d0, d1 = dict_split(d, paths)
-    d0 = tree_map(f, d0)
-    return dict_merge(d0, d1)
-
-
 def none_is_leaf(n): return treedef_is_leaf(tree_structure(n))
 
 
@@ -129,7 +114,7 @@ def tree_any(x):
 
 def tree_transpose(list_of_trees):
   """Convert a list of trees of identical structure into a single tree of lists."""
-  return jax.tree_multimap(lambda *xs: list(xs), *list_of_trees)
+  return jax.tree.map(lambda *xs: list(xs), *list_of_trees)
 
 
 tree_map_nl = partial(tree_map, is_leaf=none_is_leaf)
@@ -175,30 +160,6 @@ def tree_replace(tree, subtrees, value, none_leaf=True):
 
 
 pprint = namedtuple_pprint.PrettyPrinter(indent=2).pprint
-
-
-def passkwargs(kwargs_dict, **default_kwargs):
-    assert isinstance(kwargs_dict, dict)
-    kwargs_dict = dict(kwargs_dict)
-    for k, v in default_kwargs.items():
-        kwargs_dict.update({k: kwargs_dict.pop(k, v)})
-    return kwargs_dict
-
-
-def save_variable(var, path):
-    msg = serialization.msgpack_serialize(unfreeze(var))
-    if not os.path.splitext(path)[1]:
-        path += '.msgpack'
-    with open(path, 'wb') as f:
-        f.write(msg)
-
-
-def load_variable(path):
-    if not os.path.splitext(path)[1]:
-        path += '.msgpack'
-    with open(path, 'rb') as f:
-        msg = f.read()
-    return freeze(serialization.msgpack_restore(msg))
 
 
 def clear_xla_cache():
