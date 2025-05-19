@@ -13,6 +13,14 @@
 # limitations under the License.
 
 import numpy as np
+from scipy import signal
+from jax import numpy as jnp
+
+
+def upsample(x, up):
+    x = jnp.atleast_1d(x)
+    y = jnp.pad(x[:, None], [[0, 0], [0, up-1]]).reshape(-1)
+    return y
 
 
 def rcosdesign(beta, span, sps, shape='normal', norm_gain=False, dtype=np.float64):

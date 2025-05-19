@@ -15,8 +15,9 @@
 
 import re
 import jax
-import jax.numpy as jnp
 import numpy as np
+from jax import numpy as jnp, random as jr
+from commplax import jax_util as ju
 
 
 quasigray_32xqam = jnp.array([
@@ -47,15 +48,17 @@ def grayenc_int(x):
 
 def graydec_int(x):
     x = jnp.atleast_1d(jnp.asarray(x, dtype=jnp.int32))
-    mask = jnp.asarray(x)
-    cond = lambda mask:  mask.any()
-    def body(mask):
-        I    = mask > 0
-        mask = jnp.where(I, mask>>1, mask)
-        x    = jnp.where(I, x ^ mask, x)
-        return x
-    x = jax.lax.while_loop(cond, body, mask)
-    return x
+    m = jnp.copy(x) # mask
+    cond = lambda state:  state[1].any()
+    def body(state):
+        x, m = state
+        I = m > 0
+        m = jnp.where(I, m>>1, m)
+        x = jnp.where(I, x^m, x)
+        state = x, m
+        return state
+    y = jax.lax.while_loop(cond, body, (x, m))[0]
+    return y
 
 
 def parseqamorder(type_str):
@@ -130,7 +133,7 @@ def square_qam_decision(x, L):
 def square_qam_mod(x, L):
     x = np.asarray(x, dtype=int)
     M = int(np.sqrt(L))
-    A = jnp.linspace(-M+1, M-1, M, dtype=jnp.float64)
+    A = jnp.linspace(-M+1, M-1, M, dtype=ju.default_floating_dtype())
     C = A[None,:] + 1j*A[::-1, None]
     d = square_qam_graydec_int(x, L)
     return C[d // M, d % M]
@@ -197,6 +200,20 @@ def qammod(x, L):
     else:
         y = cross_qam_mod(x, L)
     return y
+
+
+def randpam(key, s, n, p=None):
+    n = ju.astuple(n)
+    a = jnp.linspace(-s+1, s-1, s, dtype=ju.default_floating_dtype())
+    return jr.choice(key, a, n, p=p)
+
+
+def randqam(key, s, n, p=None):
+    key_i, key_q = jr.split(key)
+    n = ju.astuple(n)
+    m = int(np.sqrt(s))
+    a = np.linspace(-m+1, m-1, m, dtype=ju.default_floating_dtype())
+    return jr.choice(key_i, a, n, p=p) + 1j * jr.choice(key_q, a, n, p=p)
 
 
 def getpower(x, real=False):
