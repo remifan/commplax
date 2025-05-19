@@ -1,11 +1,26 @@
+# Copyright 2025 The Commplax Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 import dataclasses as dc
 import numpy as np
 from jax import lax, numpy as jnp, debug as jdbg
 import equinox as eqx
 from equinox import field
 from commplax import adaptive_filter as _af
-from commplax.util import default_complexing_dtype, default_floating_dtype, astuple
-from commplax.cxopt import make_schedule, Union, Schedule
+from commplax.jax_util import default_complexing_dtype, default_floating_dtype, astuple
+from commplax._deprecated.cxopt import make_schedule, Union, Schedule
 from functools import lru_cache
 from jaxtyping import Array, Float, Int, PyTree
 from typing import Callable, Any, TypeVar

@@ -1,4 +1,4 @@
-# Copyright 2021 The Commplax Authors.
+# Copyright 2025 The Commplax Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 import numpy as np
 from jax import lax, jit, vmap, numpy as jnp, device_put
 from functools import partial, lru_cache
-from commplax import op
+from commplax._deprecated import op
 
 
 def isfloat(x):

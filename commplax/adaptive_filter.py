@@ -1,4 +1,4 @@
-# Copyright 2021 The Commplax Authors.
+# Copyright 2025 The Commplax Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,20 +13,20 @@
 # limitations under the License.
 
 
-import jax
+import dataclasses as dc
 import functools
 import numpy as np
+import jax
 from typing import Any, TypeVar, Callable, Optional, Tuple, Union
 from functools import partial
 from jax import numpy as jnp, vmap, jit, lax
-from commplax import comm, xop, cxopt
-from commplax.cxopt import make_schedule
 from jax.tree_util import tree_flatten, tree_unflatten
 from jax.lax import stop_gradient
-from commplax.cxopt import Schedule
-import dataclasses as dc
-from commplax.util import default_complexing_dtype, astuple
 from jaxtyping import Array, Int, Float, PyTree
+
+from commplax import ops, sym_map
+from commplax.optim import Schedule, make_schedule
+from commplax.jax_util import default_complexing_dtype, astuple
 
 Params = Any
 State = PyTree
@@ -82,7 +82,7 @@ def adaptive_filter(af_maker: C, trainable: bool=False, stop_grad_on_update: boo
             return apply(af_ps, af_xs)
 
         _update.trainable = trainable
-        _update.train = getattr(update, 'train', cxopt.make_schedule(False))
+        _update.train = getattr(update, 'train', make_schedule(False))
 
         return AdaptiveFilter(_init, _update, _apply)
 
@@ -128,7 +128,7 @@ def dtype_to_complex(rvs_dtype):
 
 def frame(y, taps, sps, rtap=None):
     y_pad = jnp.pad(y, mimozerodelaypads(taps=taps, sps=sps, rtap=rtap))
-    yf = jnp.array(xop.frame(y_pad, taps, sps))
+    yf = jnp.array(ops.frame(y_pad, taps, sps))
     return yf
 
 
@@ -147,7 +147,7 @@ def iterate(update: UpdateFn,
     padw_data_axes = ((0, 0),) * (truth_ndim - 1)
     truth = jnp.pad(truth, ((0, signal.shape[0] - truth.shape[0]), *padw_data_axes))
     xs = (steps, signal, truth)
-    res = xop.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs, jit_device=device)
+    res = ops.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs, jit_device=device)
     out = res if step0 is None else (steps[-1], res)
     return out
 
@@ -281,7 +281,7 @@ def lms(
     β = tap_leakage
     σ = 1e-5
     train = make_schedule(train)
-    const = jnp.asarray(comm.const('16QAM', norm=True)) if const is None else const
+    const = jnp.asarray(sym_map.const('16QAM', norm=True)) if const is None else const
 
     def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
         w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike')
@@ -333,9 +333,9 @@ def rls_lms(
     Returns:
       an ``AdaptiveFilter`` object
     """
-    _λ = cxopt.make_schedule(λ)
-    train = cxopt.make_schedule(train)
-    const = jnp.asarray(comm.const('16QAM', norm=True)) if const is None else const
+    _λ = make_schedule(λ)
+    train = make_schedule(train)
+    const = jnp.asarray(sym_map.const('16QAM', norm=True)) if const is None else const
 
     def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
         w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
@@ -391,7 +391,7 @@ def lms_MoriY(
     grad_max: Tuple[float, float] = (30., 30.),
     eps: float = 1e-8,
     beta: float = 0.,
-    const: Array = comm.const("16QAM", norm=True)
+    const: Array = sym_map.const("16QAM", norm=True)
 ) -> AdaptiveFilter:
     """Decision-Directed Least Mean Square adaptive equalizer
 
@@ -596,7 +596,7 @@ def rls_cma(
      Technol., vol. 35, no. 5, pp. 1125-1141, Mar. 2017, doi: 10.1109/JLT.2017.2662319.
 
     """
-    _λ = cxopt.make_schedule(λ)
+    _λ = make_schedule(λ)
 
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
@@ -667,7 +667,7 @@ def mu_cma(
       - [2] Vgenis, Athanasios, et al. "Nonsingular constant modulus equalizer for PDM-QPSK coherent
         optical receivers." IEEE Photonics Technology Letters 22.1 (2009): 45-47.
     """
-    lr = cxopt.make_schedule(lr)
+    lr = make_schedule(lr)
 
     if const is not None:
         R2 = jnp.array(np.mean(abs(const)**4) / np.mean(abs(const)**2))
@@ -742,8 +742,8 @@ def rde(
         carrier phase recovery in a 16-QAM optical coherent system. Journal
         of lightwave technology, 27(15), pp.3042-3049.
     """
-    lr = cxopt.make_schedule(lr)
-    train = cxopt.make_schedule(train)
+    lr = make_schedule(lr)
+    train = make_schedule(train)
 
     if const is not None:
         Rs = jnp.array(jnp.unique(jnp.abs(const)))
@@ -799,8 +799,8 @@ def rls_rde(
      Technol., vol. 35, no. 5, pp. 1125-1141, Mar. 2017, doi: 10.1109/JLT.2017.2662319.
 
     """
-    _λ = cxopt.make_schedule(λ)
-    train = cxopt.make_schedule(train)
+    _λ = make_schedule(λ)
+    train = make_schedule(train)
 
     if const is not None:
         Rs = jnp.asarray(jnp.unique(jnp.abs(const)))
@@ -856,7 +856,7 @@ def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
                                        [0, 1e-6]]), # 1e-8 is better if akf is False
                  R: Array = jnp.array([[1e-2, 0],
                                        [0, 1e-3]]),
-                 const: Array = comm.const("16QAM", norm=True),
+                 const: Array = sym_map.const("16QAM", norm=True),
                  train: Union[bool, Schedule] = False,
                  akf: Union[bool, Schedule] = False,
                  alpha: float = 0.98) -> AdaptiveFilter:
@@ -887,8 +887,8 @@ def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
           society general meeting. IEEE, 2017.
     """
     const = jnp.asarray(const)
-    train = cxopt.make_schedule(train)
-    akf = cxopt.make_schedule(akf)
+    train = make_schedule(train)
+    akf = make_schedule(akf)
 
     def init(w0=0):
         z0 = jnp.array([[0], [w0]], dtype=jnp.float32)
@@ -942,7 +942,7 @@ def foe_YanW(lr: Union[float, Schedule] = 1e-6):
     least-squares carrier phase and frequency offset estimation for general QAM 
     modulations." IEEE Transactions on wireless communications 2.5 (2003): 1040-1054.
     '''
-    lr = cxopt.make_schedule(lr)
+    lr = make_schedule(lr)
 
     def F(x):
         y = jnp.piecewise(
@@ -988,7 +988,7 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
               Q: complex = 1e-4 + 0j,
               R: complex =1e-2 + 0j,
               akf: bool = True,
-              const: Array = comm.const("16QAM", norm=True)) -> AdaptiveFilter:
+              const: Array = sym_map.const("16QAM", norm=True)) -> AdaptiveFilter:
     """Carrier Phase and Amplitude Noise Estimator
     symbol-by-symbol fine carrier phsae recovery using extended Kalman filter
 
@@ -1012,7 +1012,7 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
         society general meeting. IEEE, 2017.
     """
     const = jnp.asarray(const)
-    train = cxopt.make_schedule(train)
+    train = make_schedule(train)
 
     def init(p0=0j, dims=1):
         f = lambda x: jnp.full(dims, x)
@@ -1084,7 +1084,7 @@ def anf(f0: float,
           interconnect with adaptive notch filter for narrowband interference." Optics express
           26.18 (2018): 24066-24074.
     """
-    lr = cxopt.make_schedule(lr)
+    lr = make_schedule(lr)
     T = 1 / sr
     ω0 = 2 * np.pi * f0
 

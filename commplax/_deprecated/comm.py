@@ -17,7 +17,7 @@ import re
 import numpy as np
 import pandas as pd
 from scipy import signal, special
-from commplax import op
+from commplax._deprecated import op
 import matplotlib.pyplot as plt
 import quantumrandom
 

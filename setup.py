@@ -1,4 +1,4 @@
-# Copyright 2021 The Commplax Authors.
+# Copyright 2025 The Commplax Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ setup(name='commplax',
         'jaxlib',
         'equinox',
         'seaborn',
+        'mpl-scatter-density',
     ],
     extras_require={
         'dev': [
