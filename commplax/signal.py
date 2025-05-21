@@ -19,29 +19,64 @@ from functools import partial, lru_cache
 from commplax._deprecated import op
 
 
-def isfloat(x):
-    return issubclass(x.dtype.type, np.floating)
+def lfilter(b, a, x, zi=None):
+    # Convert inputs to JAX arrays
+    b = jnp.asarray(b)
+    a = jnp.asarray(a)
+    x = jnp.asarray(x)
 
+    # Normalize coefficients so that a[0] = 1 (like SciPy):contentReference[oaicite:9]{index=9}
+    a0 = a[0]
+    b = b / a0
+    a = a / a0
 
-def iscomplex(x):
-    return issubclass(x.dtype.type, np.complexfloating)
+    # Determine the number of state elements (filter order L)
+    na = a.shape[0] - 1  # denominator order
+    nb = b.shape[0] - 1  # numerator order
+    L = np.maximum(na, nb)  # length of state vector = max(len(a), len(b)) - 1
 
+    if L == 0:
+        # Edge case: zeroth-order filter (just gain b0/a0)
+        y = b[0] * x
+        if zi is not None:
+            # If zi given but no state (len(a)=len(b)=1), return final state as empty
+            return y, jnp.array([], dtype=x.dtype)
+        return y
 
-def scan(f, init, xs, length=None, reverse=False, unroll=1, jit_device=None, jit_backend=None):
-    '''
-    "BUG: ``lax.scan`` is known to cause memory leaks when not called within a jitted function"
-    "https://github.com/google/jax/issues/3158#issuecomment-631851006"
-    "https://github.com/google/jax/pull/5029/commits/977c9c40efa378d1321a7dd8c712af528939ed5f"
-    "https://github.com/google/jax/pull/5029"
-    "NOTE": ``scan`` runs much slower on GPU than CPU if loop iterations are small (GPU IO bottleneck?)
-    "https://github.com/google/jax/issues/2491"
-    "https://github.com/google/jax/pull/3076"
-    '''
-    @partial(jit, static_argnums=(0,3,4,5), device=jit_device, backend=jit_backend)
-    def _scan(f, init, xs, length, reverse, unroll):
-        return lax.scan(f, init, xs, length=length, reverse=reverse, unroll=unroll)
+    # Initialize state (carry) with zeros or provided zi
+    if zi is None:
+        state = jnp.zeros(L, dtype=x.dtype)
+    else:
+        state = jnp.array(zi, dtype=x.dtype)  # ensure correct type/shape
 
-    return _scan(f, init, xs, length, reverse, unroll)
+    # Zero-pad b or a to length L+1 for unified vector operations
+    # (so b_padded and a_padded have indices 0..L)
+    b_padded = jnp.pad(b, (0, (L + 1) - b.shape[0]), constant_values=0)
+    a_padded = jnp.pad(a, (0, (L + 1) - a.shape[0]), constant_values=0)
+
+    def step(carry, x_n):
+        """One filter step: update state and compute output for input x_n."""
+        d = carry  # d[0..L-1] are the delay states from previous step
+        # Compute current output using b[0] and the first delay state:contentReference[oaicite:10]{index=10}
+        y_n = b_padded[0] * x_n + d[0]
+        # Update delay states for next iteration:contentReference[oaicite:11]{index=11}:
+        # Shift states: d[1] becomes new d[0], d[2] becomes new d[1], ..., d[L-1] becomes last but one.
+        # We'll construct the new state vector element-wise.
+        # For i = 0..L-2: new_d[i] = b[i+1]*x_n - a[i+1]*y_n + d[i+1] 
+        # For i = L-1:   new_d[L-1] = b[L]*x_n - a[L]*y_n  (no + d[L] term, treated as zero)
+        # We can implement this by using vector operations on padded coefficients and shifted state:
+        d_tail = d[1:]                      # old [d[1], ..., d[L-1]]
+        d_tail = jnp.concatenate([d_tail, jnp.zeros((1,), dtype=d.dtype)])  # append 0 for the last
+        new_d = b_padded[1:] * x_n - a_padded[1:] * y_n + d_tail
+        return new_d, y_n
+
+        # Note: jax.lax.scan will handle looping over the entire input array.
+
+    # Run the scan over the input signal
+    final_state, y = lax.scan(step, state, x)
+
+    # Return output, and final state if initial state was provided
+    return (y, final_state) if zi is not None else y
 
 
 def conv1d_lax(signal, kernel, mode='SAME'):

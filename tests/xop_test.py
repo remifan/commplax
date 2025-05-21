@@ -1,7 +1,7 @@
 import numpy as np
 from absl.testing import absltest
 import jax
-from commplax import ops
+from commplax import signal
 from jax import jit, random as jr, numpy as jnp, config
 from jax._src import test_util as jtu
 
@@ -23,7 +23,7 @@ class ConvTest(jtu.JaxTestCase):
     def testConvolve(self, s, n, m, mode, dtype):
         x, h = conv_input(s, n, m, dtype)
         a = np.convolve(x, h, mode=mode)
-        b = ops.convolve(x, h, mode=mode)
+        b = signal.convolve(x, h, mode=mode)
         self.assertAllClose(a, b)
 
 if __name__ == "__main__":

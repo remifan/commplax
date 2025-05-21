@@ -24,7 +24,7 @@ from jax.tree_util import tree_flatten, tree_unflatten
 from jax.lax import stop_gradient
 from jaxtyping import Array, Int, Float, PyTree
 
-from commplax import ops, sym_map
+from commplax import signal, sym_map
 from commplax.optim import Schedule, make_schedule
 from commplax.jax_util import default_complexing_dtype, astuple
 
@@ -128,7 +128,7 @@ def dtype_to_complex(rvs_dtype):
 
 def frame(y, taps, sps, rtap=None):
     y_pad = jnp.pad(y, mimozerodelaypads(taps=taps, sps=sps, rtap=rtap))
-    yf = jnp.array(ops.frame(y_pad, taps, sps))
+    yf = jnp.array(signal.frame(y_pad, taps, sps))
     return yf
 
 
@@ -147,7 +147,7 @@ def iterate(update: UpdateFn,
     padw_data_axes = ((0, 0),) * (truth_ndim - 1)
     truth = jnp.pad(truth, ((0, signal.shape[0] - truth.shape[0]), *padw_data_axes))
     xs = (steps, signal, truth)
-    res = ops.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs, jit_device=device)
+    res = signal.scan(lambda c, xs: update(xs[0], c, xs[1:]), state, xs, jit_device=device)
     out = res if step0 is None else (steps[-1], res)
     return out
 
