@@ -26,19 +26,20 @@ def _unpack(d, B, N):
     return jax.lax.scan(lambda x, _: (x // B, x % B), d,
                         jnp.arange(N), unroll=True)[1].T[..., ::-1]
 
-def viterbi(I, L, const, tblen=None):
-    # I: input size
+
+def viterbi(I, L, const, btd=None):
+    # I: input size (e.g. 2 for binary)
     # L: memory
-    # tblen: traceback length
+    # btd: backtrace depth
     S = I**L # states number
-    T = 5 * L + 1 if tblen is None else tblen # trackback length
+    T = 5 * L + 1 if btd is None else btd # trackback length
     si = jnp.arange(S) # state indices
     ii = jnp.arange(I) # input indices
-    # ps[s] contains all the state (indices) yielding to state s with input (indices) pi[s].
+    # ps[s] contains all the previous states having a branch with state s with input pi[s]
     ps = jnp.tile(si.reshape((-1, I)), (I, 1)) # shape: (S, I)
     pi = jnp.repeat(jnp.repeat(ii[:, None], I, axis=1), S//I, axis=0) # shape: (S, I)
-    # u[s] contains all the states (values) yielding to state s with input (indices) pi[s].
-    u = jax.vmap(lambda s: const[_unpack(ps[s] + pi[s] * S, I, L+1)])(si) # shape: (S, I, L)
+    # u[s] contains all the symbols yielding to state s with input pi[s].
+    u = jax.vmap(lambda s: const[_unpack(ps[s] + pi[s] * S, I, L+1)])(si) # shape: (S, I, L+1)
 
     # initial states
     pm_0 = jnp.zeros(S)
@@ -49,8 +50,8 @@ def viterbi(I, L, const, tblen=None):
         pm_k, tr_s, tr_x = carry
         y_k, w_k = inp
 
-        v_t = jnp.inner(u, w_k)
-        bm_t = jnp.abs(v_t - y_k)**2 
+        v_t = jnp.inner(u, w_k)      # shape: (S, I); can be factored out when w_k is static
+        bm_t = jnp.abs(v_t - y_k)**2
         pm_tmp = pm_k[ps] + bm_t
         idx = jnp.argmin(pm_tmp, axis=1)
         pm_k = pm_tmp[si, idx]
@@ -58,7 +59,7 @@ def viterbi(I, L, const, tblen=None):
         tr_s = jnp.roll(tr_s, -1, axis=0).at[-1].set(ps[si, idx])
         tr_x = jnp.roll(tr_x, -1, axis=0).at[-1].set(pi[si, idx])
 
-        # traceback
+        # backtrace; T-1 delay is introduced.
         x = jax.lax.scan(lambda s, t: (tr_s[t, s], tr_x[t, s]),
                          jnp.argmin(pm_k),
                          jnp.arange(T-1, -1, -1),
