@@ -15,8 +15,6 @@
 
 import numpy as np
 import jax
-import matplotlib.pyplot as plt
-from functools import cache
 from jax import numpy as jnp, scipy as jsp
 from functools import partial
 
@@ -104,10 +102,12 @@ def map_bcjr(y, I, L, const, priori=None):
     err = jnp.abs(y[:, None, None] - v)**2
     log_priori = jnp.log(priori + 1e-30)[pi]
     gamma = -err / (2 * noise_std**2) - jnp.log(np.sqrt(2 * np.pi) * noise_std) + log_priori
+    # Forward recursion
     alpha = jax.lax.scan(
         lambda a, g: (lse((a[ps] + g), axis=1), a),
         jnp.full(S, 0), gamma,
     )[1]
+    # Backward recursion
     beta = jax.lax.scan(
         lambda b, g: (lse((b[:, None] + g).reshape((I, I * S//I)), axis=0), b),
         jnp.full(S, 0), gamma[::-1, ...],
