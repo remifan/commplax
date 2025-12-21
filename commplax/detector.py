@@ -79,14 +79,12 @@ def mlse_viterbi(I, L, const, btd=None):
     return scan, state_0
 
 
-def map_bcjr(y, I, L, const, priori=None):
+def map_bcjr(I, L, const):
     # I: input size
     # L: memory
-    # N: traceback length
     S = I**L # states number
     si = jnp.arange(S) # state indices
     ii = jnp.arange(I) # input indices
-    priori = jnp.ones(I)/I if priori is None else priori 
     # ps[s] contains all the state (indices) yielding to state s with input (indices) pi[s].
     ps = jnp.tile(si.reshape((-1, I)), (I, 1)) # shape: (S, I)
     pi = jnp.repeat(jnp.repeat(ii[:, None], I, axis=1), S//I, axis=0) # shape: (S, I)
@@ -95,29 +93,36 @@ def map_bcjr(y, I, L, const, priori=None):
  
     lse = jsp.special.logsumexp
  
-    noise_std = 0.001
-    w = jnp.pad(h, [0, L+1-h.shape[0]])
-    v = jnp.inner(u, w)
- 
-    err = jnp.abs(y[:, None, None] - v)**2
-    log_priori = jnp.log(priori + 1e-30)[pi]
-    gamma = -err / (2 * noise_std**2) - jnp.log(np.sqrt(2 * np.pi) * noise_std) + log_priori
-    # Forward recursion
-    alpha = jax.lax.scan(
-        lambda a, g: (lse((a[ps] + g), axis=1), a),
-        jnp.full(S, 0), gamma,
-    )[1]
-    # Backward recursion
-    beta = jax.lax.scan(
-        lambda b, g: (lse((b[:, None] + g).reshape((I, I * S//I)), axis=0), b),
-        jnp.full(S, 0), gamma[::-1, ...],
-    )[1][::-1, ...]
+    def apply(y, h, noise_std, priori=None):
+        priori = jnp.ones(I)/I if priori is None else priori 
+        w = jnp.pad(h, [0, L+1-h.shape[0]])
+        v = jnp.inner(u, w)
+     
+        # compute branch metric
+        err = jnp.abs(y[:, None, None] - v)**2
+        log_priori = jnp.log(priori + 1e-30)[pi]
+        gamma = -err / (2 * noise_std**2) \
+                - jnp.log(np.sqrt(2 * np.pi) * noise_std) \
+                + log_priori
+        # Forward recursion
+        alpha = jax.lax.scan(
+            lambda a, g: (lse((a[ps] + g), axis=1), a),
+            jnp.full(S, 0), gamma,
+        )[1]
+        # Backward recursion
+        beta = jax.lax.scan(
+            lambda b, g: (lse((b[:, None] + g).reshape((I, I * S//I)), axis=0), b),
+            jnp.full(S, 0), gamma[::-1, ...],
+        )[1][::-1, ...]
+        # extract log likelihood (ratio)
+        ll = (P:=lse((alpha[:,ps] + gamma + beta[..., None]).reshape((-1, I, S)), axis=2)) \
+            - lse(P, axis=1)[:, None] # with normalization
+        llr = ll[:, :, None] - ll[:, None, :]
+        # detect
+        xi = jnp.argmax(ll, axis=1)
+        x_hat = const[xi]
+            
+        return x_hat, llr
 
-    lp = (P:=lse((alpha[:,ps] + gamma + beta[..., None]).reshape((-1, I, S)), axis=2)) \
-        - lse(P, axis=1)[:, None] # log normalization
-    xi = jnp.argmax(lp, axis=1)
-    x_hat = const[xi]
-    llr = lp[:, :, None] - lp[:, None, :]
-        
-    return x_hat, llr
+    return apply
 
