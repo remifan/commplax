@@ -2,7 +2,35 @@
 
 Commplax is resurrected!
 
-Thinking in JAX and JAX your codes.
+[Thinking in JAX](https://docs.jax.dev/en/latest/notebooks/thinking_in_jax.html) and JAX your codes.
+
+## Installation
+
+**Requirements:** Python >= 3.11 (3.11 tested)
+
+Editable install is recommended for easier testing and debugging.
+
+```bash
+git clone https://github.com/remifan/commplax.git
+cd commplax
+```
+
+**CPU only** (Windows/Linux/Mac):
+```bash
+pip install -e "."
+```
+
+**CUDA 12** (Linux only, Windows not supported; WSL2 may work but untested):
+```bash
+pip install -e ".[cuda12]"
+```
+
+Verify GPU detection:
+```python
+import jax; print(jax.devices())
+```
+
+> **Note:** CUDA 13 with JAX >= 0.7 is untested. See [JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html) for more details.
 
 ## new features
 
