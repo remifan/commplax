@@ -41,6 +41,9 @@ def plot_constellation_3d(
     aspect_ratio: Tuple[float, float, float] = (2.5, 1, 1),
     camera_eye: Tuple[float, float, float] = (-1.8, -1.2, 0.5),
     subplot_titles: Optional[List[str]] = None,
+    show_density: bool = False,
+    density_bins: int = 64,
+    density_colorscale: str = 'Blues',
 ):
     """
     Visualize complex symbols in 3D with time as x-axis, I/Q as y/z-axes.
@@ -76,6 +79,13 @@ def plot_constellation_3d(
         Camera position (x, y, z). Controls the viewing angle.
     subplot_titles : list of str, optional
         Titles for each subplot. If None, uses "Channel 0", "Channel 1", etc.
+    show_density : bool, default False
+        If True, show a 2D density heatmap at the base of the plot using
+        the highlighted symbols.
+    density_bins : int, default 64
+        Number of bins for density histogram (per axis).
+    density_colorscale : str, default 'Blues'
+        Colorscale for density coloring (e.g., 'Blues', 'Purples', 'Viridis').
 
     Returns
     -------
@@ -124,8 +134,8 @@ def plot_constellation_3d(
 
     # Auto-generate 5 evenly spaced intervals if not provided
     if highlight_intervals is None:
-        # Window size: 1% of symbols, clamped between 20 and 200
-        window_size = max(20, min(200, n_symbols // 100))
+        # Window size: 3% of symbols, clamped between 60 and 600
+        window_size = max(60, min(600, n_symbols // 33))
         half_window = window_size // 2
         # 5 center positions at 0%, 25%, 50%, 75%, 100%
         centers = [0, n_symbols // 4, n_symbols // 2, 3 * n_symbols // 4, n_symbols - 1]
@@ -193,19 +203,45 @@ def plot_constellation_3d(
             else:
                 fig.add_trace(trace, row=ch + 1, col=1)
 
-        # Plot highlighted points
+        # Plot highlighted points (with optional density coloring)
         if np.any(highlight_mask):
-            trace = go.Scatter3d(
-                x=time[highlight_mask],
-                y=I[highlight_mask],
-                z=Q[highlight_mask],
-                mode='markers',
-                marker=dict(
+            I_hl = I[highlight_mask]
+            Q_hl = Q[highlight_mask]
+            t_hl = time[highlight_mask]
+
+            if show_density:
+                # Compute local density using 2D histogram lookup
+                iq_range = max(np.abs(I_hl).max(), np.abs(Q_hl).max()) * 1.1
+                hist, i_edges, q_edges = np.histogram2d(
+                    I_hl, Q_hl, bins=density_bins,
+                    range=[[-iq_range, iq_range], [-iq_range, iq_range]]
+                )
+                # Find bin indices for each point
+                i_idx = np.clip(np.digitize(I_hl, i_edges) - 1, 0, density_bins - 1)
+                q_idx = np.clip(np.digitize(Q_hl, q_edges) - 1, 0, density_bins - 1)
+                # Look up density for each point (log scale for better visibility)
+                density = np.log1p(hist[i_idx, q_idx])
+
+                marker_config = dict(
+                    size=marker_size * 1.5,
+                    color=density,
+                    colorscale=density_colorscale,
+                    showscale=False,
+                )
+            else:
+                marker_config = dict(
                     size=marker_size * 1.5,
                     color=highlight_color,
-                ),
+                )
+
+            trace = go.Scatter3d(
+                x=t_hl,
+                y=I_hl,
+                z=Q_hl,
+                mode='markers',
+                marker=marker_config,
                 name='Highlighted' if ch == 0 else None,
-                showlegend=(ch == 0),
+                showlegend=(ch == 0 and not show_density),
             )
             if n_channels == 1:
                 fig.add_trace(trace)

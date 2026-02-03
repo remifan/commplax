@@ -140,3 +140,33 @@ def pipe(*fns):
             state, x = f(state, x)
         return state, x
     return piped
+
+
+def step_at(idx: int, step_fn: Callable):
+    """Apply a step function to a specific module in a tuple.
+
+    Useful for pipelines with multiple modules bundled as a tuple.
+
+    Args:
+        idx: Index of the module to operate on.
+        step_fn: Step function (module, x) -> (module, y).
+
+    Returns:
+        A function (modules_tuple, x) -> (modules_tuple, y).
+
+    Example:
+        rx_dsp = pipe(
+            step_at(0, scan_with()),           # mimo_sop
+            lambda m, x: (m, x[::2]),          # downsample
+            step_at(1, foe_step),              # foe
+            step_at(2, scan_with(cpr_step)),   # cpr
+        )
+        modules = (mimo, foe, cpr)
+        modules_new, out = rx_dsp(modules, signal)
+    """
+    def wrapped(modules, x):
+        mod_i = modules[idx]
+        mod_i_new, y = step_fn(mod_i, x)
+        modules_new = modules[:idx] + (mod_i_new,) + modules[idx+1:]
+        return modules_new, y
+    return wrapped
