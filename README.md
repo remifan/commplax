@@ -32,35 +32,18 @@ import jax; print(jax.devices())
 
 > **Note:** CUDA 13 with JAX >= 0.7 is untested. See [JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html) for more details.
 
-## new features
+## Highlights
 
-### Model as Pytree => seamless integration with JAX
-```Python
-cpr = eq.CPR()           # create a single dimension carrier-phase-recovery module
-cpr = jax.vmap(cpr)      # vmap CPR to be N-dimension (e.g., 2 for dual polarizations)
-cpr, output = cpr(input) # input.shape=(2,N) => output.shape=(2,N)
-```
+Modules are [Equinox](https://github.com/patrick-kidger/equinox) PyTrees — compatible with all JAX transforms.
 
-### Sample mode => Easy composition
-```Python
-# An example of 15-tap 3/4-spaced 8x8 MIMO with JIT
-mimo = eq.MIMOCell(15, af=cma(lr=5e-5), dims=8, up=3, down=4)
-mimo_updated, output = jax.jit(scan)(mimo, input)
-```
-with sample mode, composition of feedback loop is easy
-``` Python
-mimo = eq.MIMOCell(15, af=dd_lms, dims=2)
-cpr = eq.CPR(dims=2, mode='feedback')
+```python
+from commplax import equalizer as eq, adaptive_filter as af, module as mod
 
-def cpr_mimo_loop(state, x):
-    cpr, mimo = state
-    y = cpr.apply(x)         # remove carrier phase
-    mimo, y = mimo(y)        # apply MIMO
-    cpr, y = cpr.update(y)   # update carrier phase tracker
-    state = cpr, mimo
-    return state, y
+# Create module
+mimo = eq.MIMOCell(15, af=af.rls_cma(), dims=2)
 
-(cpr_updated, mimo_updated), output = scan(cpr_mimo_loop, (cpr, mimo), input)
+# Run with scan (JIT-compiled)
+mimo, out = mod.scan_with()(mimo, signal)
 ```
 
 

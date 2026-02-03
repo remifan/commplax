@@ -61,25 +61,67 @@ def graydec_int(x):
     return y
 
 
-def parseqamorder(type_str):
+def parse_modulation(type_str):
+    '''Parse modulation format string like "16QAM", "PAM4", "QPSK", etc.
+
+    Returns:
+        (order, type): tuple of (int, str) e.g. (16, 'qam') or (4, 'pam')
+    '''
+    type_str = type_str.strip()
     if type_str.lower() == 'qpsk':
-        type_str = '4QAM'
+        return 4, 'qam'
     M = int(re.findall(r'\d+', type_str)[0])
     T = re.findall(r'[a-zA-Z]+', type_str)[0].lower()
-    if T != 'qam':
+    if T not in ('qam', 'pam'):
         raise ValueError('{} is not implemented yet'.format(T))
+    return M, T
+
+
+# Keep for backward compatibility
+def parseqamorder(type_str):
+    M, T = parse_modulation(type_str)
+    if T != 'qam':
+        raise ValueError('{} is not a QAM format'.format(type_str))
     return M
 
 
+def pamconst(M):
+    '''Generate PAM-M constellation points.
+
+    Args:
+        M: PAM order (e.g., 2, 4, 8)
+
+    Returns:
+        Array of M real-valued constellation points: [-(M-1), ..., -1, 1, ..., (M-1)]
+    '''
+    return jnp.linspace(-M + 1, M - 1, M, dtype=ju.default_floating_dtype())
+
+
 def const(type_str=None, norm=False):
-    ''' generate constellation given its natrual names '''
+    '''Generate constellation given its natural names.
+
+    Args:
+        type_str: Modulation format string, e.g., "16QAM", "PAM4", "4PAM", "QPSK"
+        norm: If True, normalize to unit average power
+
+    Returns:
+        Array of constellation points (complex for QAM, real for PAM)
+    '''
     if isinstance(type_str, str):
-        M = parseqamorder(type_str)
+        M, T = parse_modulation(type_str)
     else:
-        M = type_str
-    C = qammod(range(M), M)
-    if norm:
-        C = C / jnp.sqrt(2*(M-1)/3)
+        # Legacy: assume QAM if just a number is passed
+        M, T = type_str, 'qam'
+
+    if T == 'pam':
+        C = pamconst(M)
+        if norm:
+            # PAM-M power = (M^2 - 1) / 3
+            C = C / jnp.sqrt((M**2 - 1) / 3)
+    else:  # qam
+        C = qammod(range(M), M)
+        if norm:
+            C = C / jnp.sqrt(2 * (M - 1) / 3)
     return C
 
 

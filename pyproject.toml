@@ -11,39 +11,24 @@ authors = [
 ]
 license = { text = "Apache-2.0" }
 dependencies = [
-    "jax<=0.6.2",
-    "jaxlib<=0.6.2",
-    "equinox<=0.13.0",
+    "jax",
+    "jaxlib",
+    "equinox",
     "seaborn",
     "mpl-scatter-density"
 ]
 
 [project.optional-dependencies]
 cuda12 = [
-    "jax[cuda12]<=0.6.2" # cuda13 required for jax>=0.7, which is not tested against commplax
+    "jax[cuda12]"
 ]
 dev = [
     "attr",
     "mock",
     "pytest",
+    "pytest-cov",
     "parameterized",
     "ipykernel",
-    "ipympl"
-]
-fs = [
-    "zarr[jupyter]==2.9.5",
-    "s3fs",
-    "fsspec"
-]
-test = [
-    "pytest",
-    "pytest-cov"
-]
-all = [
-    "zarr[jupyter]==2.9.5",
-    "s3fs",
-    "fsspec",
-    "plotly",
+    "ipympl",
     "tqdm"
 ]
-

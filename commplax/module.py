@@ -12,74 +12,131 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Module composition utilities for equinox-based DSP modules.
+
+This module provides utilities for:
+- Scanning modules over sequences via lax.scan
+- Composable step functions with all-reduce patterns for ensembles
+
+For creating ensembles, use ``eqx.filter_vmap`` directly.
+See: https://docs.kidger.site/equinox/tricks/#ensembling
+"""
 
 import dataclasses as dc
-import numpy as np
 import jax
-import equinox as eqx
 from jax import lax, numpy as jnp
-from equinox import field
-from functools import wraps
-from jaxtyping import Array, Float, Int, PyTree
-from typing import Callable, Any
-from typing import Callable, TypeVar
-from numpy.typing import ArrayLike
-from inspect import isclass
-from commplax.jax_util import default_complexing_dtype, default_floating_dtype, astuple
+from typing import Callable, Optional
 
 
-dim_ax = eqx.if_array(-1)
-M = TypeVar('M', bound=Callable)
-T = TypeVar('T', bound=Callable)
+def scan_with(step: Optional[Callable] = None, jit_backend: Optional[str] = None):
+    """Create a scanner for equinox modules.
 
-def make_ensamble(
-        cls: M, 
-        reps: ArrayLike, 
-        transform: T = eqx.filter_vmap(in_axes=dim_ax, out_axes=dim_ax),
-        func=['__call__']) -> M:
-    _spec = {f: transform(getattr(cls, f)) for f in func} # TODO: exception handling
-    _cls = type(cls.__name__+'_ensamble', (cls,), _spec) # to avoid monkey patching
-    @wraps(cls) # preserve the metadata and typing
-    def wrapper(*args, **kwargs):
-        return transform(lambda _: _cls(*args, **kwargs))(jnp.empty(reps))
-    return wrapper
+    Factory that returns a JIT-compiled function for scanning a module
+    over a sequence of inputs using lax.scan.
 
+    Args:
+        step: Custom step function (state, x) -> (state, y).
+            If None, uses module's __call__: m(x) -> (m, y).
+        jit_backend: JIT backend option:
+            - 'cpu': Force CPU backend (often faster for symbol-wise ops)
+            - 'gpu'/'tpu': Force specific backend
+            - None: Use JAX default
+            - False: Disable JIT
 
-def make_iterable(mod: M, func=['__call__'], **scan_kwargs) -> M:
-    if isclass(mod):
-        mod = _make_iterable(mod, func=func, **scan_kwargs)
+    Returns:
+        A function (module, xs) -> (updated_module, ys).
+
+    Example:
+        # Simple: scan module's __call__
+        scanner = scan_with()
+        mimo_updated, outputs = scanner(mimo, inputs)
+
+        # Force CPU backend for symbol-wise processing
+        scanner = scan_with(jit_backend='cpu')
+        mimo_updated, outputs = scanner(mimo, inputs)
+
+        # Custom step with ensemble processing
+        def foe_step(foe, x):
+            foe, aux = eqx.filter_vmap(eq.FOE.update)(foe, x)
+            fo_avg = jnp.mean(foe.fo) * jnp.ones_like(foe.fo)
+            foe = dc.replace(foe, fo=fo_avg)
+            foe, y = eqx.filter_vmap(eq.FOE.apply)(foe, x)
+            return foe, (y, aux)
+
+        scanner = scan_with(foe_step, jit_backend='cpu')
+        foe_updated, (y, aux) = scanner(foe, x_blocks)
+    """
+    def scan_fn(m, x):
+        # step is not hashable, dont't do
+        # f = (lambda m, x: m(x)) if step is None else step
+        # instead do
+        f = lambda m, x: m(x) if step is None else step(m, x)
+        return lax.scan(f, m, x)
+
+    if jit_backend is False:
+        return scan_fn
+    elif jit_backend is not None:
+        return jax.jit(scan_fn, backend=jit_backend)
     else:
-        cls = mod.__class__
-        cls = _make_iterable(cls, func=func, **scan_kwargs)
-        mod = cls(**dc.asdict(mod))
-    return mod
+        return jax.jit(scan_fn)
 
 
-def _make_iterable(cls: M, func=['__call__'], **scan_kwargs) -> M:
-    def make_wrapper(f):
-        @wraps(f) # preserve the metadata and typing
-        def wrapper(self, xs):
-            return scan(self, xs, func=f, **scan_kwargs)
-        return wrapper
-    isstr = lambda x: isinstance(x, str)
-    cls_dict = {f: make_wrapper(getattr(cls, f) if isstr(f) else f) for f in func}
-    _cls = type(cls.__name__+'_scan', (cls,), cls_dict) # to avoid monkey patching
-    return _cls
+# =============================================================================
+# Composable ensemble step primitives
+# =============================================================================
+
+def allreduce(field: str, op: Callable = jnp.mean):
+    """All-reduce: reduce a field across ensemble and broadcast back.
+
+    This is the "cross-compute" step in the update → reduce → apply pattern.
+
+    Args:
+        field: Name of the field to reduce (e.g., 'fo' for frequency offset).
+        op: Reduction operation (default: jnp.mean). Common choices:
+            - jnp.mean: average across ensemble
+            - jnp.median: robust to outliers
+            - lambda x: x[0]: use first element only
+
+    Returns:
+        A function (ensemble, x) -> (ensemble_with_reduced_field, x).
+
+    Example:
+        reduce_fo = allreduce('fo', jnp.mean)
+        foe, x = reduce_fo(foe, x)  # average FO across polarizations
+    """
+    def fn(ensemble, x_aux):
+        value = getattr(ensemble, field)
+        reduced = op(value) * jnp.ones_like(value)
+        ensemble = dc.replace(ensemble, **{field: reduced})
+        return ensemble, x_aux
+    return fn
 
 
-def scan(mod, xs, filter=eqx.is_array, func=None, cb=None):
-    func = getattr(mod.__class__, '__call__') if func is None else func
-    arr, static = eqx.partition(mod, filter)
-    def step(carry, x):
-        mod = eqx.combine(carry, static)
-        mod, y = func(mod, x)
-        if cb is not None:
-            jax.debug.callback(cb, mod)
-        carry, _ = eqx.partition(mod, filter)
-        return carry, y
-    arr, ys = lax.scan(step, arr, xs)
-    mod = eqx.combine(arr, static)
-    return mod, ys
+def pipe(*fns):
+    """Compose multiple step functions into a single pipeline.
 
+    Each function should have signature (state, x) -> (state, x).
+    Functions are applied left-to-right.
 
-# MIMO = make_iterable(MIMOCell) # maybe buggy
+    Args:
+        *fns: Step functions to compose.
+
+    Returns:
+        A composed function (state, x) -> (state, x).
+
+    Example:
+        # Compose multiple transformations
+        step = pipe(
+            lambda state, x: (state, preprocess(x)),
+            lambda state, x: model(state, x),
+            lambda state, x: (state, postprocess(x)),
+        )
+
+        # Use with lax.scan
+        final_state, outputs = lax.scan(step, init_state, inputs)
+    """
+    def piped(state, x):
+        for f in fns:
+            state, x = f(state, x)
+        return state, x
+    return piped

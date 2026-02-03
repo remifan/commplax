@@ -1108,4 +1108,3 @@ def anf(f0: float,
 
     return AdaptiveFilter(init, update, apply)
 
-

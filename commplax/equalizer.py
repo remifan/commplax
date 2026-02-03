@@ -141,9 +141,9 @@ class MIMOCell(eqx.Module):
 
 
 class FOE(eqx.Module):
-    fo: float
-    i: int
-    t: int
+    fo: Float
+    i: Int
+    t: Int
     state: PyTree
     af: PyTree = field(static=True)
     uar: float = field(static=True)
@@ -152,7 +152,7 @@ class FOE(eqx.Module):
     def __init__(self, fo=0.0, uar=1.0, af=None, i=0, t=0, mode="feedforward", state=None, af_kwds={}):
         self.i = jnp.asarray(i)
         self.t = jnp.asarray(t)
-        self.af = _af.foe_YanW(**af_kwds) if af is None else af
+        self.af = _af.foe_YanW_ekf(**af_kwds) if af is None else af
         self.fo = jnp.asarray(fo)
         self.uar = uar * 1.0
         fo4init = fo if mode == "feedforward" else 0.
@@ -172,7 +172,7 @@ class FOE(eqx.Module):
         state, out = self.af.update(self.i, self.state, input)
         fo = self.fo + out[0] if self.mode == "feedback" else out[0]
         foe = dc.replace(self, fo=fo, state=state, i=self.i+1)
-        return foe, None
+        return foe, input
 
     def apply(self, input):
         T = self.t + jnp.arange(input.shape[0])
@@ -183,38 +183,85 @@ class FOE(eqx.Module):
 
 
 class CPR(eqx.Module):
-    i: int
-    state: PyTree
+    """Single-dimensional Carrier Phase Recovery module (symbol-by-symbol).
+
+    Uses 4th-power PLL by default for robust phase tracking.
+    For ensembles (e.g., dual-pol), use eqx.filter_vmap.
+
+    Example:
+        @eqx.filter_vmap
+        def make_cpr_ensemble(_):
+            return CPR(af=af.cpr_4thpower_pll(mu=0.01))
+        cpr = make_cpr_ensemble(jnp.arange(2))
+
+        @eqx.filter_vmap
+        def cpr_step(cpr, x):
+            return cpr(x)
+
+        # Use with scan_with for symbol-by-symbol processing
+        cpr, out = mod.scan_with(cpr_step)(cpr, signal)  # signal: (N, 2)
+    """
+    phase: Float
+    i: Int
     af: PyTree = field(static=True)
-    mode: str = field(static=True)
-    update_mode: Union[int, Schedule] = field(static=True)
 
-    def __init__(self, af=None, dims=1, i=0, mode="feedforward", state=None, af_kwds={}, update_mode=1):
+    def __init__(self, phase=0.0, af=None, i=0):
         self.i = jnp.asarray(i)
-        self.af = _af.cpane_ekf(**af_kwds) if af is None else af
-        self.state = self.af.init(dims=dims) if state is None else state
-        self.mode = mode
-        self.update_mode = make_schedule(update_mode)
+        self.phase = jnp.asarray(phase)
+        self.af = _af.cpr_4thpower_pll() if af is None else af
 
-    def __call__(self, input):
-        x, *args = astuple(input)
-        if self.mode == "feedforward":
-            cpr = self.update(input)[0]
-            cpr, output = cpr.apply(x)
-        else:
-            cpr, output = cpr.apply(x)
-            cpr = cpr.update((output, *args))[0]
-        return cpr, output
+    def __call__(self, y):
+        """Process single symbol: update phase and apply correction."""
+        new_phase, _ = self.af.update(self.i, self.phase, y)
+        y_corrected = self.af.apply(new_phase, y)
+        cpr = dc.replace(self, phase=new_phase, i=self.i + 1)
+        return cpr, y_corrected
 
-    def update(self, input):
-        state = lax.cond(
-            af_update_flag(self.update_mode, self.af.update.train, self.i),
-            lambda *_: self.af.update(self.i, self.state, input)[0],
-            lambda *_: self.state,
-            )
-        cpr = dc.replace(self, state=state, i=self.i+1)
-        return cpr, None
+    def update(self, y):
+        """Update phase estimate from single symbol."""
+        new_phase, aux = self.af.update(self.i, self.phase, y)
+        cpr = dc.replace(self, phase=new_phase, i=self.i + 1)
+        return cpr, y
 
-    def apply(self, input):
-        output = self.af.apply(self.state, input)
-        return self, output
+    def apply(self, y):
+        """Apply current phase correction to single symbol."""
+        y_corrected = self.af.apply(self.phase, y)
+        return self, y_corrected
+
+
+def align_phase(signal, const, n_samples=1000):
+    """Resolve phase ambiguity by testing candidate rotations.
+
+    Tests 4 candidate phases (0°, 90°, 180°, 270°) and picks the one
+    with minimum total distance to constellation points.
+
+    Args:
+        signal: Complex signal array, shape (..., N) or (N,)
+        const: Reference constellation (e.g., sym_map.const('16QAM', norm=True))
+        n_samples: Number of samples to use for alignment (default: 1000)
+
+    Returns:
+        (aligned_signal, best_phase): Rotated signal and the phase used
+
+    Example:
+        # After CPR (which has π/2 ambiguity)
+        aligned, phase = align_phase(cpr_out, sym_map.const('16QAM', norm=True))
+    """
+    # Use subset for efficiency
+    sample = signal.ravel()[:n_samples]
+
+    # 4 candidates for QAM (90° symmetry)
+    candidates = jnp.array([0., jnp.pi/2, jnp.pi, 3*jnp.pi/2])
+
+    # Rotate by each candidate
+    rotated = sample[None, :] * jnp.exp(-1j * candidates[:, None])
+
+    # Distance to nearest constellation point for each candidate
+    dist = jnp.min(jnp.abs(const[:, None, None] - rotated[None, :, :]), axis=0)
+    total_dist = jnp.sum(dist**2, axis=1)
+
+    # Pick best
+    best_idx = jnp.argmin(total_dist)
+    best_phase = candidates[best_idx]
+
+    return signal * jnp.exp(-1j * best_phase), best_phase

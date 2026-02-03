@@ -1,4 +1,4 @@
-# Copyright 2025 The Commplax Authors.
+# Copyright 2021 The Commplax Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,24 +17,8 @@ import jax
 from jax import jit, vmap, numpy as jnp, device_put
 from jax.core import Value
 import numpy as np
-from commplax import experimental as exp, signal
+from commplax._deprecated import xop, comm, experimental as exp
 from functools import partial
-
-from commplax._deprecated import comm, xop
-
-
-def default_floating_dtype():
-    if jax.config.jax_enable_x64:  # pyright: ignore
-        return jnp.float64
-    else:
-        return jnp.float32
-
-
-def default_complexing_dtype():
-    if jax.config.jax_enable_x64:  # pyright: ignore
-        return jnp.complex128
-    else:
-        return jnp.complex64
 
 
 def getpower(x, axis=0, real=False):
@@ -121,7 +105,7 @@ def dbp_params(
     return H, h_casual, phi
 
 
-def mimoconv(y, h, mode='same', conv=signal.fftconvolve):
+def mimoconv(y, h, mode='same', conv=xop.fftconvolve):
     dims = y.shape[-1]
     y = jnp.tile(y, (1, dims))
     h = jnp.reshape(h, (h.shape[0], dims * dims))
@@ -130,7 +114,7 @@ def mimoconv(y, h, mode='same', conv=signal.fftconvolve):
     return z
 
 
-def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=signal.fftconvolve):
+def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=xop.fftconvolve):
 
     y = device_put(y)
     h = device_put(h)
@@ -151,7 +135,7 @@ def dbp_timedomain(y, h, c, mode='SAME', homosteps=True, scansteps=True, conv=si
 
     if homosteps and scansteps: # homogeneous steps is faster on first jitted run
     # scan not working on 'SAME' mode due to carry shape change
-        y = signal.scan(lambda x, p: (N(D(x, p[0]), p[1]), 0.), y, (h, c))[0]
+        y = xop.scan(lambda x, p: (N(D(x, p[0]), p[1]), 0.), y, (h, c))[0]
     else:
         steps = c.shape[0]
         for i in range(steps):
@@ -199,7 +183,7 @@ def foe_daxcorr(y, x, L=100):
     if N < L:
         raise TypeError('signal length %d is less then xcorr length %d' % (N, L))
     s = y * x.conj() # remove modulated data phase
-    sf = signal.frame(s, L, L)
+    sf = xop.frame(s, L, L)
     sf2 = sf[:-1]
     sf1 = sf[1:]
     return jnp.mean(jnp.angle(sf1 * sf2.conj())) / L
@@ -220,7 +204,7 @@ def measure_cd(x, sr, start=-0.25, end=0.25, bins=2000, wavlen=1550e-9):
     L = jnp.zeros(K, dtype=jnp.float32)
 
     def f(_, pi):
-        return None, jnp.sum(jnp.abs(signal.frft(jnp.abs(signal.frft(x, pi))**2, -1))**2)
+        return None, jnp.sum(jnp.abs(xop.frft(jnp.abs(xop.frft(x, pi))**2, -1))**2)
 
     # Use `scan` instead of `vmap` here to avoid potential large memory allocation.
     # Despite the speed of `scan` scales surprisingly well to large bins,
@@ -241,13 +225,13 @@ def dimsdelay(x):
     if dims <= 1:
         raise ValueError('input dimension must be at least 2 but given %d' % dims)
     x = device_put(x)
-    return jax.vmap(signal.finddelay, in_axes=(None, -1), out_axes=0)(x[:, 0], x[:, 1:])[0]
+    return jax.vmap(xop.finddelay, in_axes=(None, -1), out_axes=0)(x[:, 0], x[:, 1:])[0]
 
 
 def repalign(y, x, skipfirst=0):
     N = y.shape[0]
     M = x.shape[0]
-    offsets = -jax.vmap(signal.finddelay, in_axes=-1)(y[skipfirst:], x)[0] + skipfirst
+    offsets = -jax.vmap(xop.finddelay, in_axes=-1)(y[skipfirst:], x)[0] + skipfirst
     rep = -(-N // M)
     xrep = jnp.tile(x, [rep, 1])
     z = jax.vmap(jnp.roll, in_axes=-1, out_axes=-1)(xrep, offsets)[:N, :]
@@ -280,7 +264,7 @@ def localfoe(signal, frame_size=16384, frame_step=5000, sps=1, fitkind=None, deg
     # [BUG]: polyfit is buggy in GPU
     y = device_put(signal, cpus[0])
     dims = y.shape[-1]
-    fo_local = signal.framescaninterp(y, method, frame_size, frame_step, sps)
+    fo_local = xop.framescaninterp(y, method, frame_size, frame_step, sps)
     if fitkind is not None:
         if fitkind.lower() == 'poly':
             fo_T = jnp.tile(jnp.arange(fo_local.shape[0])[:, None], (1, dims))
@@ -293,12 +277,11 @@ def localfoe(signal, frame_size=16384, frame_step=5000, sps=1, fitkind=None, deg
 def localpower(signal, frame_size=5000, frame_step=1000):
     y = device_put(signal)
     poweval = lambda y: jnp.mean(jnp.abs(y)**2, axis=0)
-    return signal.framescaninterp(y, poweval, frame_size, frame_step)
+    return xop.framescaninterp(y, poweval, frame_size, frame_step)
 
 
 def localdc(signal, frame_size=5000, frame_step=1000):
     y = device_put(signal)
     dceval = lambda y: jnp.mean(y, axis=0)
-    return signal.framescaninterp(y, dceval, frame_size, frame_step)
-
+    return xop.framescaninterp(y, dceval, frame_size, frame_step)
 

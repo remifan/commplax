@@ -19,6 +19,13 @@ from functools import partial, lru_cache
 from commplax._deprecated import op
 
 
+def isfloat(x):
+    return issubclass(x.dtype.type, np.floating)
+
+def iscomplex(x):
+    return issubclass(x.dtype.type, np.complexfloating)
+
+
 def lfilter(b, a, x, zi=None):
     # Convert inputs to JAX arrays
     b = jnp.asarray(b)

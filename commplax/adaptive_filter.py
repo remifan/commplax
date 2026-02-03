@@ -165,7 +165,7 @@ def r2c(r):
     '''
     if not jnp.iscomplexobj(r):
         if r.ndim != 1:
-            raise ValueError('invalid ndim, expected 2 but got %d' % r.ndim)
+            raise ValueError('invalid ndim, expected 1 but got %d' % r.ndim)
         I = np.arange(r.shape[0]//2) * 2
         c  = r[I] + 1j*r[I+1]
     else:
@@ -182,7 +182,7 @@ def c2r(c):
     '''
     if jnp.iscomplexobj(c):
         if c.ndim != 1:
-            raise ValueError('invalid ndim, expected 2 but got %d' % c.ndim)
+            raise ValueError('invalid ndim, expected 1 but got %d' % c.ndim)
         dims = c.shape[0]
         r = jnp.empty(shape=(dims * 2,), dtype=dtype_to_real(c.dtype))
         I = np.arange(dims)
@@ -267,17 +267,29 @@ def lms(
     const: Optional[Array]=None,
     norm: bool=True,
     tap_leakage: float = 0.,
+    bias: bool = False,
+    bias_lr: Optional[Union[float, Schedule]] = None,
 ) -> AdaptiveFilter:
     """LMS MIMO adaptive filter.
 
     Args:
-      lr: Optional; learning rate
-      const: Optional; constellation used to infer R2 when R2 is None
+      lr: Learning rate for filter taps
+      train: Training mode schedule (uses ground truth when True)
+      const: Constellation for decision-directed mode (default: 16QAM)
+      norm: If True, use normalized LMS
+      tap_leakage: Tap leakage factor for regularization
+      bias: If True, include adaptive bias term for slow-varying DC offset
+      bias_lr: Learning rate for bias (default: lr/10 for slower adaptation)
 
     Returns:
       an ``AdaptiveFilter`` object
+
+    Note:
+      When bias=True, the state becomes (w, b) where b is the bias vector.
+      The bias is updated with a slower learning rate to track DC offset.
     """
     α = make_schedule(lr)
+    α_bias = make_schedule(bias_lr if bias_lr is not None else lr * 0.1)
     β = tap_leakage
     σ = 1e-5
     train = make_schedule(train)
@@ -285,26 +297,126 @@ def lms(
 
     def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
         w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike')
-        s0 = w0,
+        if bias:
+            b0 = jnp.zeros(dims, dtype=dtype)
+            s0 = w0, b0
+        else:
+            s0 = w0,
         return s0
 
-    def loss_fn(w, inp, i):
+    def loss_fn_no_bias(w, inp, i):
         u, x = inp
         v = mimo(w, u)
         d = jnp.where(train(i), x, decision(const, v))
         loss = jnp.sum(jnp.abs(d - v)**2)
         return loss
 
+    def loss_fn_with_bias(params, inp, i):
+        w, b = params
+        u, x = inp
+        v = mimo(w, u) + b
+        d = jnp.where(train(i), x, decision(const, v))
+        loss = jnp.sum(jnp.abs(d - v)**2)
+        return loss
+
+    def update(i, s, inp):
+        u = inp[0]
+        if bias:
+            w, b = s
+            l, (g_w, g_b) = jax.value_and_grad(loss_fn_with_bias)((w, b), inp, i)
+            out = (w, b, l)
+            if norm:
+                μ = α(i) * 1 / (σ + jnp.sum(jnp.abs(u)**2, axis=0))[:, None, None]
+            else:
+                μ = α(i)
+            w = (1-μ*β) * w - μ * g_w.conj()
+            b = b - α_bias(i) * g_b.conj()
+            s = w, b
+        else:
+            w, = s
+            l, g = jax.value_and_grad(loss_fn_no_bias)(w, inp, i)
+            out = (w, l)
+            if norm:
+                μ = α(i) * 1 / (σ + jnp.sum(jnp.abs(u)**2, axis=0))[:, None, None]
+            else:
+                μ = α(i)
+            w = (1-μ*β) * w - μ * g.conj()
+            s = w,
+        return s, out
+
+    def apply(s, y):
+        if bias:
+            w, b = s
+            return mimo(w, y) + b
+        else:
+            w = tuple(s)[0]
+            return mimo(w, y)
+
+    update.train = train
+
+    return AdaptiveFilter(init, update, apply)
+
+
+@partial(adaptive_filter, trainable=True)
+def lms_block(
+    lr: Union[float, Schedule] = 1e-3,
+    train: Union[bool, Schedule] = False,
+    const: Optional[Array] = None,
+    norm: bool = True,
+    tap_leakage: float = 0.,
+) -> AdaptiveFilter:
+    """Block-based LMS MIMO adaptive filter.
+
+    Processes N symbols per update, computing gradient over the entire block.
+    More efficient on GPU/TPU than symbol-by-symbol LMS.
+
+    Args:
+        lr: Learning rate (scalar or Schedule)
+        train: Training mode schedule (uses ground truth when True)
+        const: Constellation for decision-directed mode
+        norm: If True, use normalized LMS
+        tap_leakage: Tap leakage factor for regularization
+
+    Returns:
+        an ``AdaptiveFilter`` object
+
+    Note:
+        Input shape per update: (N, taps, dims) where N is block size.
+        Converges similarly to symbol-by-symbol LMS but with one update per block.
+    """
+    α = make_schedule(lr)
+    β = tap_leakage
+    σ = 1e-5
+    train = make_schedule(train)
+    const = jnp.asarray(sym_map.const('16QAM', norm=True)) if const is None else const
+
+    # Batched MIMO: process N frames at once
+    mimo_block = jax.vmap(mimo, in_axes=(None, 0))
+
+    def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
+        w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
+        s0 = w0,
+        return s0
+
+    def loss_fn(w, inp, i):
+        u_block, x_block = inp  # u_block: (N, taps, dims), x_block: (N, dims)
+        v_block = mimo_block(w, u_block)  # (N, dims)
+        d_block = jnp.where(train(i), x_block, vmap(lambda v: decision(const, v))(v_block))
+        loss = jnp.mean(jnp.sum(jnp.abs(d_block - v_block)**2, axis=-1))
+        return loss
+
     def update(i, s, inp):
         w, = s
-        u = inp[0]
+        u_block = inp[0]  # (N, taps, dims)
         l, g = jax.value_and_grad(loss_fn)(w, inp, i)
         out = (w, l)
         if norm:
-            μ = α(i) * 1 / (σ + jnp.sum(jnp.abs(u)**2, axis=0))[:, None, None]
+            # Average normalization over the block
+            u_power = jnp.mean(jnp.sum(jnp.abs(u_block)**2, axis=1), axis=0)  # (dims,)
+            μ = α(i) * 1 / (σ + u_power)[:, None, None]
         else:
             μ = α(i)
-        w = (1-μ*β) * w - μ * g.conj()
+        w = (1 - μ * β) * w - μ * g.conj()
         s = w,
         return s, out
 
@@ -323,28 +435,43 @@ def rls_lms(
     δ: float = 0.01,
     train: Union[bool, Schedule] = False,
     const: Optional[Array]=None,
+    bias: bool = False,
+    bias_lr: Union[float, Schedule] = 1e-4,
 ) -> AdaptiveFilter:
-    """LMS MIMO adaptive filter.
+    """RLS-based LMS MIMO adaptive filter.
 
     Args:
-      lr: Optional; learning rate
-      const: Optional; constellation used to infer R2 when R2 is None
+      λ: Forgetting factor (default: 0.999)
+      δ: Regularization for initial P matrix
+      train: Training mode schedule (uses ground truth when True)
+      const: Constellation for decision-directed mode (default: 16QAM)
+      bias: If True, include adaptive bias term for slow-varying DC offset
+      bias_lr: Learning rate for bias (default: 1e-4 for slow adaptation)
 
     Returns:
       an ``AdaptiveFilter`` object
+
+    Note:
+      When bias=True, the state becomes (w, P, b) where b is the bias vector.
+      The bias is updated with gradient descent (separate from RLS tap update).
     """
     _λ = make_schedule(λ)
+    _bias_lr = make_schedule(bias_lr)
     train = make_schedule(train)
     const = jnp.asarray(sym_map.const('16QAM', norm=True)) if const is None else const
 
     def init(w0=None, taps=19, dims=2, dtype=default_complexing_dtype(), nspike=1):
         w0 = mimoinitializer(taps, dims, dtype, initkind='centralspike', nspike=nspike)
         P0 = jnp.tile(δ * jnp.eye(taps * dims, dtype=dtype), (dims, 1, 1))
-        s0 = (w0, P0)
+        if bias:
+            b0 = jnp.zeros(dims, dtype=dtype)
+            s0 = (w0, P0, b0)
+        else:
+            s0 = (w0, P0)
         return s0
 
     @partial(jax.vmap, in_axes=(None, 0, (None, 0)), out_axes=(0, -1))
-    def update(i, s, inp):
+    def update_no_bias(i, s, inp):
         w, _P = s
         u, x = inp
         N, dims = u.shape[0], w.shape[0]
@@ -352,7 +479,6 @@ def rls_lms(
         i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
         P = _P[i_P]
 
-        u, x = inp
         u_i = u.reshape(-1, order='F')[:, None]
         h = w.conj().reshape(-1)[:, None]
         λ = _λ(i)
@@ -372,9 +498,49 @@ def rls_lms(
         out = (ε, v)
         return s, out
 
+    @partial(jax.vmap, in_axes=(None, 0, (None, 0)), out_axes=(0, -1))
+    def update_with_bias(i, s, inp):
+        w, _P, b = s
+        u, x = inp
+        N, dims = u.shape[0], w.shape[0]
+        # in case of polyphase filtering, P is cropped
+        i_P = jnp.ix_(jnp.arange(N*dims), jnp.arange(N*dims))
+        P = _P[i_P]
+
+        u_i = u.reshape(-1, order='F')[:, None]
+        h = w.conj().reshape(-1)[:, None]
+        λ = _λ(i)
+
+        k = 1/λ * P @ u_i / (1 + 1/λ * u_i.conj().T @ P @ u_i)
+        v = jnp.squeeze(h.conj().T @ u_i) + b
+        d = jnp.where(train(i), x, decision(const, v))
+        ε = jnp.squeeze(d - v)
+        h = h + k * ε.conj()
+        P = 1/λ * P - 1/λ * k * u_i.conj().T @ P
+        # Update bias with simple gradient descent (ensure scalar output for vmap)
+        b = jnp.squeeze(b + _bias_lr(i) * ε.conj())
+
+        dims = w.shape[0]
+        w = h.conj().reshape((dims, -1))
+
+        _P = _P.at[i_P].set(P)
+        s = w, _P, b
+        out = (ε, v)
+        return s, out
+
+    def update(i, s, inp):
+        if bias:
+            return update_with_bias(i, s, inp)
+        else:
+            return update_no_bias(i, s, inp)
+
     def apply(s, y):
         w = astuple(s)[0]
-        return mimo(w, y)
+        v = mimo(w, y)
+        if bias:
+            b = s[2]
+            return v + b
+        return v
 
     update.train = train
 
@@ -938,7 +1104,7 @@ def frame_cpr_kf(Q: Array = jnp.array([[0,    0],
 @partial(adaptive_filter)
 def foe_YanW(lr: Union[float, Schedule] = 1e-6):
     '''
-    Wang, Yan, Erchin Serpedin, and Philippe Ciblat. "Optimal blind nonlinear 
+    [1] Wang, Yan, Erchin Serpedin, and Philippe Ciblat. "Optimal blind nonlinear 
     least-squares carrier phase and frequency offset estimation for general QAM 
     modulations." IEEE Transactions on wireless communications 2.5 (2003): 1040-1054.
     '''
@@ -965,10 +1131,11 @@ def foe_YanW(lr: Union[float, Schedule] = 1e-6):
         return l
 
     def update(i, s, x):
+        N = x.shape[0]
         w, = s
         l, g = jax.value_and_grad(loss)(w, x)
         out = (w / 4, l)
-        w = w - lr(i) * g
+        w = w - lr(i) * g / (N**2) # norm grad by N^2
         s = w,
         return s, out
 
@@ -981,28 +1148,128 @@ def foe_YanW(lr: Union[float, Schedule] = 1e-6):
     return AdaptiveFilter(init, update, apply)
 
 
+@partial(adaptive_filter)
+def foe_YanW_ekf(
+    q: float = 1e-15,           # process noise (constant)
+    r: float = 1e-1,            # measurement noise (constant)
+    p0: float = 1e-9,           # initial covariance (constant)
+):
+    '''
+    EKF-based frequency offset estimation [1].
+    Parameters are constant (no N-scaling) since the loss function
+    already normalizes the gradient by N².
+
+    Args:
+        q: Process noise. Models frequency drift between blocks.
+            Larger q → faster tracking, noisier estimates.
+
+        r: Measurement noise. Models gradient estimation noise.
+            Larger r → smoother estimates, slower response.
+
+        p0: Initial covariance.
+            Larger p0 → faster initial convergence.
+
+    Note:
+        Smaller block sizes (N) converge slower due to the fundamental
+        O(1/N³) scaling of frequency estimation variance (Cramér-Rao bound).
+
+    Reference:
+    [1] Wang, Yan, Erchin Serpedin, and Philippe Ciblat. "Optimal blind nonlinear
+    least-squares carrier phase and frequency offset estimation for general QAM
+    modulations." IEEE Transactions on wireless communications 2.5 (2003): 1040-1054.
+    '''
+
+    def F(x):
+        y = jnp.piecewise(
+            x,
+            [x < 0.7236, x >= 1.1708],
+            [lambda x: 0.36 * x, lambda x: x - 0.09, 0.]
+        )
+        return y
+
+    def init(w0=0.):
+        w = jnp.asarray(w0 * 4)
+        # Use -1 as sentinel; actual P computed on first update when N is known
+        P = jnp.asarray(-1.0)
+        return (w, P)
+
+    def loss(w, x):
+        N = x.shape[0]
+        n = jnp.arange(N)
+        y = F(jnp.abs(x)) * jnp.exp(4j * jnp.angle(x))
+        # N² normalization for N-agnostic gradient
+        l = -jnp.abs((y * jnp.exp(-1j * w * n)).sum())**2 / N**2
+        return l
+
+    def update(i, s, x):
+        w, P = s
+
+        # Initialize P on first iteration (sentinel = -1)
+        P = jnp.where(P < 0, p0, P)
+
+        # Predict
+        P_pred = P + q
+
+        # Gradient and Hessian via autodiff (innovation: d = g, expect g → 0)
+        g = jax.grad(loss)(w, x)
+        H = jax.grad(jax.grad(loss))(w, x)
+
+        # Use |H| for numerical stability (H should be negative at maximum)
+        H_abs = jnp.maximum(jnp.abs(H), 1e-12)
+
+        # Kalman gain
+        S = H_abs**2 * P_pred + r
+        K = P_pred * H_abs / S
+
+        # Output before update
+        out = (w / 4, loss(w, x))
+
+        # State update
+        w_new = w - K * g
+        P_new = (1 - K * H_abs) * P_pred
+        P_new = jnp.maximum(P_new, 1e-16)  # prevent negative variance
+
+        return (w_new, P_new), out
+
+    def apply(s, y):
+        w, P = s
+        N = y.shape[0]
+        n = jnp.arange(N)
+        return y * jnp.exp(-1j * w * n)
+
+    return AdaptiveFilter(init, update, apply)
+
+
 @partial(adaptive_filter, trainable=True)
 def cpane_ekf(train: Union[bool, Schedule] = False,
               alpha: float = 0.99,
               beta: float = 0.6,
               Q: complex = 1e-4 + 0j,
-              R: complex =1e-2 + 0j,
+              R: complex = 1e-2 + 0j,
               akf: bool = True,
               const: Array = sym_map.const("16QAM", norm=True)) -> AdaptiveFilter:
-    """Carrier Phase and Amplitude Noise Estimator
-    symbol-by-symbol fine carrier phsae recovery using extended Kalman filter
+    """Carrier Phase and Amplitude Noise Estimator (single-dimensional).
+
+    Symbol-by-symbol fine carrier phase recovery using extended Kalman filter.
+    For multi-dimensional processing, use eqx.filter_vmap.
 
     Args:
       train: scheduler for training mode
-      alpha: smoothening factor
-      beta: smoothening factor
-      Q: covariance matrix of observer noises
-      R: covariance matrix of system noises
-      akf: adaptive controlling of Q and R, a.k.a, AKF
+      alpha: smoothing factor for Q/R adaptation
+      beta: smoothing factor for phase averaging
+      Q: process noise covariance
+      R: measurement noise covariance
+      akf: adaptive controlling of Q and R (AKF)
       const: reference constellation
 
     Returns:
-      a ``AdaptiveFilter`` object
+      an ``AdaptiveFilter`` object
+
+    Example:
+        @eqx.filter_vmap
+        def make_cpr(_):
+            return eq.CPR(af=af.cpane_ekf())
+        cpr = make_cpr(jnp.arange(2))  # dual-pol
 
     References:
       - [1] Pakala, L. and Schmauss, B., 2016. Extended Kalman filtering for joint mitigation
@@ -1014,18 +1281,17 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
     const = jnp.asarray(const)
     train = make_schedule(train)
 
-    def init(p0=0j, dims=1):
-        f = lambda x: jnp.full(dims, x)
-        state0 = (f(p0), f(1j), f(0j), f(Q), f(R))
+    def init(p0=0j):
+        state0 = (jnp.asarray(p0), jnp.asarray(1j), jnp.asarray(0j),
+                  jnp.asarray(Q), jnp.asarray(R))
         return state0
 
-    @partial(jax.vmap, in_axes=(None, -1, -1), out_axes=-1)
     def update(i, state, inp):
-        Psi_c, P_c, Psi_a, Q, R = state
+        Psi_c, P_c, Psi_a, _Q, _R = state
         y, x = inp
 
         Psi_p = Psi_c
-        P_p = P_c + Q
+        P_p = P_c + _Q
         # exponential moving average
         Psi_a = beta * Psi_a + (1 - beta) * Psi_c
 
@@ -1034,27 +1300,160 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
                       const[jnp.argmin(jnp.abs(const - y * jnp.exp(-1j * Psi_a)))])
 
         H = 1j * d * jnp.exp(1j * Psi_p)
-        K = P_p * H.conj() / (H * P_p * H.conj() + R)
+        K = P_p * H.conj() / (H * P_p * H.conj() + _R)
         v = y - d * jnp.exp(1j * Psi_p)
 
-        out = (Psi_c, (Q, R))
+        out = (Psi_c, (_Q, _R))
 
         Psi_c = Psi_p + K * v
         P_c = (1. - K * H) * P_p
         e = y - d * jnp.exp(1j * Psi_c)
-        Q = alpha * Q + (1 - alpha) * K * v * v.conj() * K.conj() if akf else Q
-        R = alpha * R + (1 - alpha) * (e * e.conj() + H * P_p * H.conj()) if akf else R
+        _Q = alpha * _Q + (1 - alpha) * K * v * v.conj() * K.conj() if akf else _Q
+        _R = alpha * _R + (1 - alpha) * (e * e.conj() + H * P_p * H.conj()) if akf else _R
 
-        state = (Psi_c, P_c, Psi_a, Q, R)
+        state = (Psi_c, P_c, Psi_a, _Q, _R)
 
         return state, out
 
-    @partial(jax.vmap, in_axes=-1, out_axes=-1)
-    def apply(s, ys):
+    def apply(s, y):
         Psi = tuple(s)[0]
-        return ys * jnp.exp(-1j * Psi)
+        return y * jnp.exp(-1j * Psi)
 
     update.train = train
+
+    return AdaptiveFilter(init, update, apply)
+
+
+def cpr_4thpower_pll(
+    mu: float = 0.01,
+    M: int = 4,
+) -> AdaptiveFilter:
+    """4th-power PLL for carrier phase recovery.
+
+    Removes QAM modulation via M-th power, then tracks phase with a PLL.
+    Handles any initial phase offset without ambiguity during tracking.
+
+    Single-dimensional: use with eq.CPR and eqx.filter_vmap for ensembles.
+
+    Note: Has π/2 ambiguity in final output for M=4 (square QAM).
+    Resolve with differential decoding or final block alignment if needed.
+
+    Args:
+        mu: Loop bandwidth / learning rate.
+            Larger = faster tracking, more noise.
+            Typical: 0.001-0.1
+        M: Power to raise signal (4 for square QAM, 2 for QPSK).
+            Removes modulation: symbol phases become multiples of 2π/M.
+
+    Returns:
+        AdaptiveFilter with single-dimensional state.
+
+    Example:
+        @eqx.filter_vmap
+        def make_cpr_ensemble(_):
+            return eq.CPR(af=af.cpr_4thpower_pll(mu=0.01))
+        cpr = make_cpr_ensemble(jnp.arange(2))
+    """
+
+    def init(phase0=0.0):
+        return jnp.asarray(phase0)
+
+    def update(i, phase, y):
+        # M-th power removes QAM modulation
+        # For 16-QAM: symbol phases are k*π/2, so y^4 has phase 4*carrier_phase
+        y_M = y ** M
+
+        # Expected phase after M-th power
+        expected = M * phase
+
+        # Phase error (unwrapped to [-π, π])
+        err = jnp.angle(y_M) - expected
+        err = jnp.arctan2(jnp.sin(err), jnp.cos(err))  # wrap to [-π, π]
+
+        # Scale back to carrier phase domain
+        err_scaled = err / M
+
+        # PLL update
+        phase_new = phase + mu * err_scaled
+
+        # Keep phase in reasonable range to avoid numerical issues
+        phase_new = jnp.mod(phase_new + jnp.pi, 2*jnp.pi) - jnp.pi
+
+        return phase_new, err_scaled
+
+    def apply(phase, y):
+        return y * jnp.exp(-1j * phase)
+
+    return AdaptiveFilter(init, update, apply)
+
+
+def cpr_partition_pll(
+    mu: float = 0.01,
+    const: Array = sym_map.const('16QAM', norm=True),
+) -> AdaptiveFilter:
+    """Partition-based PLL for 16-QAM carrier phase recovery.
+
+    Uses outer ring symbols (at ±45°, ±135°) for robust phase tracking.
+    Works with arbitrary initial phase offset including 45°.
+
+    The outer ring of normalized 16-QAM has amplitude ~1.34 and phases
+    at ±45°, ±135°. By detecting these symbols and comparing to expected
+    phases, we can track carrier phase without ambiguity.
+
+    Args:
+        mu: Loop bandwidth / learning rate.
+            Smaller = slower but more stable.
+            Typical: 0.001-0.05
+        const: Reference constellation (default: normalized 16-QAM).
+            Used to compute amplitude threshold automatically.
+
+    Returns:
+        AdaptiveFilter with single-dimensional state.
+
+    Example:
+        cpr = eq.CPR(af=af.cpr_partition_pll(mu=0.01))
+    """
+    const = jnp.asarray(const)
+
+    # Compute amplitude rings from constellation
+    amps = jnp.abs(const)
+    unique_amps = jnp.unique(jnp.round(amps, decimals=3))  # ~[0.447, 1.0, 1.342]
+    # Threshold between middle and outer ring
+    amp_threshold = (unique_amps[-2] + unique_amps[-1]) / 2  # ~1.17 for 16-QAM
+
+    # Expected phases for outer ring of 16-QAM (±3, ±3) symbols
+    # At 45°, 135°, -135°, -45°
+    outer_phases = jnp.array([jnp.pi/4, 3*jnp.pi/4, -3*jnp.pi/4, -jnp.pi/4])
+
+    def init(phase0=0.0):
+        return jnp.asarray(phase0)
+
+    def update(i, phase, y):
+        # Rotate by current phase estimate
+        y_rot = y * jnp.exp(-1j * phase)
+
+        # Amplitude-based weight: outer ring contributes more
+        # Soft weighting avoids hard decisions
+        amp = jnp.abs(y)
+        weight = jnp.clip((amp - amp_threshold) / 0.2, 0.0, 1.0)
+
+        # Find phase of rotated symbol
+        actual_phase = jnp.angle(y_rot)
+
+        # Find nearest outer ring phase
+        diffs = actual_phase - outer_phases
+        diffs = jnp.arctan2(jnp.sin(diffs), jnp.cos(diffs))  # wrap to [-π, π]
+        nearest_idx = jnp.argmin(jnp.abs(diffs))
+        err = diffs[nearest_idx]
+
+        # Weighted PLL update (outer ring symbols weighted more)
+        phase_new = phase + mu * weight * err
+        phase_new = jnp.mod(phase_new + jnp.pi, 2*jnp.pi) - jnp.pi
+
+        return phase_new, err
+
+    def apply(phase, y):
+        return y * jnp.exp(-1j * phase)
 
     return AdaptiveFilter(init, update, apply)
 
