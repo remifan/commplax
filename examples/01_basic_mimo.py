@@ -3,10 +3,8 @@
 # dependencies = [
 #     "marimo",
 #     "numpy",
-#     "jax",
-#     "equinox",
 #     "matplotlib",
-#     "commplax @ git+https://github.com/remifan/commplax.git",
+#     "commplax[plot] @ git+https://github.com/remifan/commplax.git",
 # ]
 # ///
 

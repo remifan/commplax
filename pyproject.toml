@@ -14,12 +14,14 @@ dependencies = [
     "jax",
     "jaxlib",
     "equinox",
+]
+
+[project.optional-dependencies]
+plot = [
     "seaborn",
     "plotly",
     "mpl-scatter-density"
 ]
-
-[project.optional-dependencies]
 cuda12 = [
     "jax[cuda12]"
 ]
