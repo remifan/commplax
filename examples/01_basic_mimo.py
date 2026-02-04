@@ -6,7 +6,7 @@
 #     "jax",
 #     "equinox",
 #     "matplotlib",
-#     "commplax",
+#     "commplax @ git+https://github.com/remifan/commplax.git",
 # ]
 # ///
 
