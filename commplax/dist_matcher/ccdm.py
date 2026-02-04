@@ -12,6 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Constant Composition Distribution Matching (CCDM).
+
+Arithmetic coding based distribution matcher for probabilistic shaping.
+
+References:
+    [1] Schulte, Patrick, and Georg Böcherer. "Constant composition distribution matching."
+        IEEE Transactions on Information Theory 62.1 (2015): 430-434.
+    [2] Said, Amir. "Introduction to arithmetic coding-theory and practice."
+        Hewlett Packard Laboratories Report (2004): 1057-7149.
+"""
+
 import jax
 import jax.numpy as jnp
 from jax import lax, jit
@@ -23,7 +34,7 @@ def idquant(p, n):
     '''
     solve P', P' = argmin(P') (D_KL(P', P)), subject to P' is n-type
 
-    [1] G. Böcherer and B. C. Geiger. (Mar. 2015). “Optimal quantization for distribution synthesis.” 
+    [1] G. Böcherer and B. C. Geiger. (Mar. 2015). "Optimal quantization for distribution synthesis."
         [Online]. Available: http://arxiv.org/abs/1307.6843
     '''
     p = np.asarray(p)
@@ -37,7 +48,7 @@ def idquant(p, n):
         cj = n_i[index] + 1
         n_i[index] = cj
         p_quant[index] = (cj + 1) * np.log(cj + 1) - cj * np.log(cj) + t[index]
-    
+
     return n_i
 
 
@@ -88,10 +99,22 @@ def find_n_by_maxbitnum(p, b):
 
 def CCDM(rate, freqs, num_state_bits=16):
     '''
-    [1] Schulte, Patrick, and Georg Böcherer. "Constant composition distribution matching."
-        IEEE Transactions on Information Theory 62.1 (2015): 430-434.
-    [2] Said, Amir. "Introduction to arithmetic coding-theory and practice."
-          Hewlett Packard Laboratories Report (2004): 1057-7149.
+    Constant Composition Distribution Matcher.
+
+    Args:
+        rate: Tuple (n_bits, n_syms) specifying the rate
+        freqs: Array of symbol frequencies (composition)
+        num_state_bits: Precision of arithmetic coder state (default: 16, max: 30)
+
+    Returns:
+        encode: Function (bits) -> syms
+        decode: Function (syms) -> bits
+
+    References:
+        [1] Schulte, Patrick, and Georg Böcherer. "Constant composition distribution matching."
+            IEEE Transactions on Information Theory 62.1 (2015): 430-434.
+        [2] Said, Amir. "Introduction to arithmetic coding-theory and practice."
+              Hewlett Packard Laboratories Report (2004): 1057-7149.
     '''
     assert num_state_bits <= 30
 
@@ -101,7 +124,7 @@ def CCDM(rate, freqs, num_state_bits=16):
     full_range = 1 << num_state_bits
     half_range = full_range >> 1
     quarter_range = half_range >> 1
-    minimum_range = quarter_range + 2 
+    minimum_range = quarter_range + 2
     maximum_total = minimum_range
     state_mask = full_range - 1
 
@@ -153,17 +176,17 @@ def CCDM(rate, freqs, num_state_bits=16):
 
     def dec_shift(S):
         num_underflow, low, high, bi, bits = S
-        bit = low >> (num_state_bits - 1) 
+        bit = low >> (num_state_bits - 1)
         bit = jnp.where(low <= high, bit, 1) # ready to terminate & flush bits
         bits, bi = write_bits(bits, bi, bit)
-        
+
         # Write out the saved underflow bits
         num_underflow, bits, bi = lax.while_loop(
             lambda v: v[0] > 0,
             lambda v: (v[0] - 1, *write_bits(*v[1:], bit ^ 1)),
             (num_underflow, bits, bi)
             )
-        
+
         low, high = post_shift(low, high)
 
         S = num_underflow, low, high, bi, bits
@@ -180,7 +203,7 @@ def CCDM(rate, freqs, num_state_bits=16):
         x, freqs, low, high, bi, bits = S
 
         range_ = high - low + 1
-        
+
         cdf, total = freqs2cdf(freqs)
         symlow = cdf[sym, 0]
         symhigh = cdf[sym, 1]
@@ -196,7 +219,7 @@ def CCDM(rate, freqs, num_state_bits=16):
             (x, low, high, bi, bits),
             )
         # Now low's top bit must be 0 and high's top bit must be 1
-        
+
         # While low's top two bits are 01 and high's are 10, delete the second highest bit of both
         x, low, high, bi, bits = lax.while_loop(
             lambda v: (v[1] & ~v[2] & quarter_range) != 0,
@@ -217,7 +240,7 @@ def CCDM(rate, freqs, num_state_bits=16):
         range_ = high - low + 1
         offset = code - low
         value = ((offset + 1) * total - 1) // range_
-        
+
         # A kind of binary search. Find highest symbol such that freqs.get_low(symbol) <= value.
         start = 0
         end = c_syms
@@ -234,7 +257,7 @@ def CCDM(rate, freqs, num_state_bits=16):
 
         S = code, freqs, low, high, bi, bits
         S = update(S, sym, shift_fn=enc_shift, underflow_fn=enc_underflow)
-        
+
         return S, sym
 
     def decode_step(S, sym):
@@ -268,6 +291,21 @@ def CCDM(rate, freqs, num_state_bits=16):
 
 
 def CCDM_helper(target_p, n_syms=128, max_no_bits=None, *args, **kwargs):
+    '''
+    Helper to create CCDM encoder/decoder from target distribution.
+
+    Args:
+        target_p: Target probability distribution (must sum to 1)
+        n_syms: Number of symbols per block (default: 128)
+        max_no_bits: If specified, find n_syms to achieve this bit count
+        *args, **kwargs: Additional arguments passed to CCDM
+
+    Returns:
+        freqs: Quantized frequency table
+        rate: Tuple (n_bits, n_syms)
+        encode: Encoder function
+        decode: Decoder function
+    '''
     assert np.allclose(np.sum(target_p), 1.0)
 
     p = np.asarray(target_p)
@@ -279,99 +317,3 @@ def CCDM_helper(target_p, n_syms=128, max_no_bits=None, *args, **kwargs):
     enc, dec = CCDM(rate, freqs, *args, **kwargs)
 
     return freqs, rate, enc, dec
-
-
-# =============================================================================
-# Probabilistic Constellation Shaping (PCS) - Hierarchical LUT Distribution Matcher
-# Reference: OIF 1600ZR+ Implementation Agreement (oif2024.447.06)
-# =============================================================================
-
-def PCS(lut_tables=None):
-    '''
-    Probabilistic Constellation Shaping using hierarchical LUT-based distribution matcher.
-
-    This is used in 1600ZR+ to shape the amplitude distribution for improved SNR efficiency.
-    The shaping separates amplitude bits (shaped via LUTs) from sign bits (uniform).
-
-    Args:
-        lut_tables: Dictionary of LUT tables for the hierarchical tree.
-                    If None, uses default tables for 1600ZR+ (b=114 bits per column).
-
-    Returns:
-        encode: Function (bits) -> (amplitude_syms, sign_bits)
-        decode: Function (amplitude_syms, sign_bits) -> bits
-
-    Reference:
-        [1] OIF Implementation Agreement for 1600ZR+ (oif2024.447.06), Section 6.3
-        [2] "Fixed Hierarchical Tree Probabilistic Constellation Shaping"
-
-    Note:
-        This is a placeholder implementation. Full implementation requires:
-        - 5-layer LUT hierarchy (A→B→C→D→E)
-        - Post-encode 35-bit permutation for OFEC compatibility
-        - Proper bit-to-LUT address mapping
-    '''
-    # TODO: Implement full hierarchical LUT structure per OIF spec
-    # For now, return identity functions as placeholder
-
-    def encode(bits):
-        '''
-        Encode uniform bits to shaped amplitude symbols + sign bits.
-
-        Args:
-            bits: Input bit array
-
-        Returns:
-            amplitude_bits: Shaped amplitude bits (from LUT outputs)
-            sign_bits: Uniform sign bits (passed through)
-        '''
-        # Placeholder: pass through (no shaping)
-        # Real implementation splits bits into LUT inputs and sign bits,
-        # processes through hierarchical LUT tree
-        n = len(bits)
-        n_sign = n // 4  # Approximate: ~1504 sign bits per 3328 input bits
-        sign_bits = bits[:n_sign]
-        amplitude_bits = bits[n_sign:]
-        return amplitude_bits, sign_bits
-
-    def decode(amplitude_bits, sign_bits):
-        '''
-        Decode shaped symbols back to uniform bits.
-
-        Args:
-            amplitude_bits: Shaped amplitude bits
-            sign_bits: Uniform sign bits
-
-        Returns:
-            bits: Recovered uniform bits
-        '''
-        # Placeholder: concatenate (inverse of encode placeholder)
-        bits = jnp.concatenate([sign_bits, amplitude_bits])
-        return bits
-
-    return encode, decode
-
-
-def PCS_helper(mode='1600ZR+'):
-    '''
-    Helper to create PCS encoder/decoder for specific ZR+ modes.
-
-    Args:
-        mode: '1600ZR+' (b=114) or '1200ZR+' (b=62)
-
-    Returns:
-        encode, decode: PCS encoder and decoder functions
-    '''
-    if mode == '1600ZR+':
-        # 1600ZR+: b=114 bits per LUT column
-        # Input: 1,118,208 bits -> Output: 1,193,472 bits
-        pass
-    elif mode == '1200ZR+':
-        # 1200ZR+: b=62 bits per LUT column
-        # Input: 838,656 bits -> Output: similar expansion
-        pass
-    else:
-        raise ValueError(f"Unknown mode: {mode}. Use '1600ZR+' or '1200ZR+'")
-
-    return PCS(lut_tables=None)
-
