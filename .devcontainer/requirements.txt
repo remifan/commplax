@@ -4,6 +4,10 @@ tqdm
 seaborn
 xlrd
 
+# Docs
+mkdocs-material
+marimo
+
 ## installed in docker image
 # Jax
 # --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html

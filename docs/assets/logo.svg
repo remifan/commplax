@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- I component (sine wave) - starts at center -->
+  <path d="M2 24 C8 24, 10 10, 14 10 C18 10, 20 24, 24 24 C28 24, 30 38, 34 38 C38 38, 40 24, 46 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        opacity="1"/>
+  <!-- Q component (cosine wave) - starts at peak, 90° ahead -->
+  <path d="M2 10 C6 10, 8 24, 12 24 C16 24, 18 38, 22 38 C26 38, 28 24, 32 24 C36 24, 38 10, 42 10 C44 10, 46 16, 46 18"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        opacity="0.5"/>
+</svg>

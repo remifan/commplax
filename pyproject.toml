@@ -15,6 +15,7 @@ dependencies = [
     "jaxlib",
     "equinox",
     "seaborn",
+    "plotly",
     "mpl-scatter-density"
 ]
 
@@ -31,4 +32,8 @@ dev = [
     "ipykernel",
     "ipympl",
     "tqdm"
+]
+docs = [
+    "mkdocs-material",
+    "marimo"
 ]
