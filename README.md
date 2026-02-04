@@ -1,8 +1,8 @@
-# Commplax: JAX-based toolbox for optical communications
+# Commplax: Optical PHY in JAX
 
 > **Note:** Commplax is under heavy development. APIs may change and things can break.
 
-Since commplax was first released for the paper [gdbp_study](https://github.com/remifan/gdbp_study), the JAX ecosystem has undergone rapid changes. This version modernizes commplax with better practices around [Equinox](https://github.com/patrick-kidger/equinox) and [JAX](https://github.com/google/jax).
+Since commplax was first released for the paper [gdbp_study](https://github.com/remifan/gdbp_study), the JAX ecosystem has undergone rapid changes. This version modernizes commplax with better practices around [Equinox](https://github.com/patrick-kidger/equinox) and [JAX](https://github.com/google/jax), informed by industrial perspectives.
 
 ## Installation
 
