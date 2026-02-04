@@ -24,7 +24,9 @@ including training sequences, pilots, and frame alignment words.
 
 Reference:
     [1] OIF-400ZR-03.0.1, Section 12 (DSP framing)
-    [2] OIF 1600ZR+ Implementation Agreement, Section 6.7
+    [2] OIF-800ZR-01.0, Section 5.10 (DSP framing)
+    [3] OIF 1600ZR+ Implementation Agreement, Section 6.7
+    [4] ITU-T G.709.6 Annex A (shared TS/FAW/pilot sequences)
 """
 
 import jax.numpy as jnp
@@ -76,22 +78,30 @@ CONFIG_400ZR = DSPFrameConfig(
     pilot_poly=0b10100011001,  # x^10 + x^8 + x^4 + x^3 + 1
 )
 
-# 800ZR configuration (OIF-800ZR-01.0) - placeholder, verify from spec
+# 800ZR/1600ZR+ shared PRBS10 parameters (ITU-T G.709.6 Annex A.1.2.1)
+# Polynomial: x^10 + x^7 + x^3 + x + 1
+_PRBS10_POLY_G709 = 0b10010001011
+_PILOT_SEED_X_G709 = 0x34E
+_PILOT_SEED_Y_G709 = 0x084
+
+# 800ZR configuration (OIF-800ZR-01.0)
+# Uses same DSP framing as 1600ZR+ (ITU-T G.709.6)
 CONFIG_800ZR = DSPFrameConfig(
     name='800ZR',
-    subframe_symbols=3712,      # TBD - verify from spec
-    superframe_subframes=49,    # TBD - verify from spec
-    pilot_interval=32,
+    subframe_symbols=7296,
+    superframe_subframes=24,
+    pilot_interval=64,
     ts_symbols=11,
     faw_symbols=22,
-    reserved_symbols=76,
+    reserved_symbols=74,
     qpsk_amplitude=3,
-    pilot_seed_x=0x19E,
-    pilot_seed_y=0x0D0,
-    pilot_poly=0b10100011001,
+    pilot_seed_x=_PILOT_SEED_X_G709,
+    pilot_seed_y=_PILOT_SEED_Y_G709,
+    pilot_poly=_PRBS10_POLY_G709,
 )
 
 # 1600ZR+ configuration (OIF 1600ZR+ IA)
+# Uses same DSP framing basis as 800ZR (ITU-T G.709.6)
 CONFIG_1600ZRP = DSPFrameConfig(
     name='1600ZR+',
     subframe_symbols=7296,
@@ -101,9 +111,9 @@ CONFIG_1600ZRP = DSPFrameConfig(
     faw_symbols=22,
     reserved_symbols=48,        # GOI(5) + RES(15) + VSU(6) + other
     qpsk_amplitude=3,
-    pilot_seed_x=0x000,         # TBD - verify from spec
-    pilot_seed_y=0x000,
-    pilot_poly=0b10000000001,   # TBD - verify from spec
+    pilot_seed_x=_PILOT_SEED_X_G709,
+    pilot_seed_y=_PILOT_SEED_Y_G709,
+    pilot_poly=_PRBS10_POLY_G709,
 )
 
 # Lookup by name
@@ -231,9 +241,12 @@ def symbol_mapper_16QAM(spec: str = '400ZR'):
 # Training Sequences
 # =============================================================================
 
-def _training_sequence_400ZR(S: int = 3) -> Tuple[jnp.ndarray, jnp.ndarray]:
+def _training_sequence(S: int = 3) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
-    Generate 400ZR training sequence per OIF-400ZR-03.0.1 Table 14.
+    Generate training sequence per ITU-T G.709.6 Annex A.1.1.
+
+    This training sequence is shared across 400ZR, 800ZR, and 1600ZR+.
+    (OIF-400ZR-03.0.1 Table 14, OIF-800ZR-01.0 Table 16)
 
     Args:
         S: QPSK amplitude (3 for standard)
@@ -242,7 +255,6 @@ def _training_sequence_400ZR(S: int = 3) -> Tuple[jnp.ndarray, jnp.ndarray]:
         ts_x: Training sequence for X polarization (11 QPSK symbols)
         ts_y: Training sequence for Y polarization (11 QPSK symbols)
     """
-    # Table 14: Training symbol sequence
     # First symbol (*) is also processed as pilot
     ts_x = jnp.array([
         -S + S*1j,   # Index 1*
@@ -275,64 +287,22 @@ def _training_sequence_400ZR(S: int = 3) -> Tuple[jnp.ndarray, jnp.ndarray]:
     return ts_x, ts_y
 
 
-def _training_sequence_1600ZRP(S: int = 3) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """
-    Generate 1600ZR+ training sequence per OIF spec Table 19.
-
-    Args:
-        S: QPSK amplitude (3 for 1600ZR+, 1 for 1200ZR+)
-
-    Returns:
-        ts_x: Training sequence for X polarization (11 QPSK symbols)
-        ts_y: Training sequence for Y polarization (11 QPSK symbols)
-    """
-    ts_x = jnp.array([
-        -S + S*1j,   # Index 1
-         S + S*1j,   # Index 2
-        -S + S*1j,   # Index 3
-         S + S*1j,   # Index 4
-        -S - S*1j,   # Index 5
-         S + S*1j,   # Index 6
-        -S + S*1j,   # Index 7
-         S - S*1j,   # Index 8
-        -S - S*1j,   # Index 9
-         S + S*1j,   # Index 10
-        -S - S*1j,   # Index 11
-    ], dtype=jnp.complex64)
-
-    ts_y = jnp.array([
-        -S - S*1j,   # Index 1
-        -S - S*1j,   # Index 2
-         S - S*1j,   # Index 3
-        -S + S*1j,   # Index 4
-        -S + S*1j,   # Index 5
-         S + S*1j,   # Index 6
-         S - S*1j,   # Index 7
-         S + S*1j,   # Index 8
-        -S + S*1j,   # Index 9
-        -S - S*1j,   # Index 10
-         S + S*1j,   # Index 11
-    ], dtype=jnp.complex64)
-
-    return ts_x, ts_y
-
-
 def get_training_sequence(config: DSPFrameConfig) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Get training sequence for a given spec configuration."""
     S = config.qpsk_amplitude
-    if config.name == '400ZR' or config.name == '800ZR':
-        return _training_sequence_400ZR(S)
-    else:
-        return _training_sequence_1600ZRP(S)
+    return _training_sequence(S)
 
 
 # =============================================================================
 # Frame Alignment Word (FAW)
 # =============================================================================
 
-def _faw_400ZR(S: int = 3) -> Tuple[jnp.ndarray, jnp.ndarray]:
+def _faw(S: int = 3) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
-    Generate 400ZR Frame Alignment Word per OIF-400ZR-03.0.1 Table 13.
+    Generate Frame Alignment Word per ITU-T G.709.6 Annex A.1.3.
+
+    This FAW is shared across 400ZR, 800ZR, and 1600ZR+.
+    (OIF-400ZR-03.0.1 Table 13, OIF-800ZR-01.0 Table 15)
 
     Args:
         S: QPSK amplitude
@@ -341,7 +311,7 @@ def _faw_400ZR(S: int = 3) -> Tuple[jnp.ndarray, jnp.ndarray]:
         faw_x: FAW for X polarization (22 QPSK symbols)
         faw_y: FAW for Y polarization (22 QPSK symbols)
     """
-    # Table 13: FAW sequence (22 symbols)
+    # FAW sequence (22 symbols)
     faw_x = jnp.array([
          S - S*1j,   # 1
          S + S*1j,   # 2
@@ -398,8 +368,7 @@ def _faw_400ZR(S: int = 3) -> Tuple[jnp.ndarray, jnp.ndarray]:
 def get_faw(config: DSPFrameConfig) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Get Frame Alignment Word for a given spec configuration."""
     S = config.qpsk_amplitude
-    # 400ZR and 800ZR use same FAW structure
-    return _faw_400ZR(S)
+    return _faw(S)
 
 
 # =============================================================================
@@ -699,6 +668,12 @@ SUPERFRAME_SUBFRAMES_400ZR = CONFIG_400ZR.superframe_subframes
 SUPERFRAME_SYMBOLS_400ZR = CONFIG_400ZR.superframe_symbols
 PILOT_INTERVAL_400ZR = CONFIG_400ZR.pilot_interval
 TS_SYMBOLS_400ZR = CONFIG_400ZR.ts_symbols
+
+# 800ZR parameters
+SUBFRAME_SYMBOLS_800ZR = CONFIG_800ZR.subframe_symbols
+SUPERFRAME_SUBFRAMES_800ZR = CONFIG_800ZR.superframe_subframes
+SUPERFRAME_SYMBOLS_800ZR = CONFIG_800ZR.superframe_symbols
+PILOT_INTERVAL_800ZR = CONFIG_800ZR.pilot_interval
 
 # 1600ZR+ parameters (backward compat)
 SUBFRAME_SYMBOLS = CONFIG_1600ZRP.subframe_symbols
