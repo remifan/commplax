@@ -19,7 +19,7 @@ Optional extras: `plot` (visualization), `cuda12` (GPU), `dev` (testing/linting)
 
 > **Note:** See [JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html) for GPU setup details.
 
-## Highlights
+## Quick Start
 
 Modules are [Equinox](https://github.com/patrick-kidger/equinox) PyTrees — compatible with all JAX transforms.
 
