@@ -40,10 +40,10 @@ def _():
     from commplax import (
         module as mod,
         equalizer as eq,
-        adaptive_filter as af,
+        adaptive_kernel as ak,
         sym_map,
     )
-    return af, convolve, eq, jnp, mod, np, plt, sym_map
+    return ak, convolve, eq, jnp, mod, np, plt, sym_map
 
 
 @app.cell(hide_code=True)
@@ -111,10 +111,10 @@ def _(mo):
 
 
 @app.cell
-def _(af, eq):
+def _(ak, eq):
     mimo = eq.MIMOCell(
         num_taps=5,
-        af=af.rls_cma(),
+        kernel=ak.rls_cma(),
         dims=2,
     )
     print(f"MIMO state shape: {mimo.state[0].shape}")

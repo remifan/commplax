@@ -673,7 +673,7 @@ def cma(
       an ``AdaptiveFilter`` object
 
     Examples:
-      >>> from commplax.adaptive_filter import cma
+      >>> from commplax.adaptive_kernel import cma
       >>>
       >>> af = cma(lr=1e-4, R2=1.32) # for non-PS power normalized 16QAM signal
 
@@ -1268,7 +1268,7 @@ def cpane_ekf(train: Union[bool, Schedule] = False,
     Example:
         @eqx.filter_vmap
         def make_cpr(_):
-            return eq.CPR(af=af.cpane_ekf())
+            return eq.CPR(kernel=ak.cpane_ekf())
         cpr = make_cpr(jnp.arange(2))  # dual-pol
 
     References:
@@ -1351,7 +1351,7 @@ def cpr_4thpower_pll(
     Example:
         @eqx.filter_vmap
         def make_cpr_ensemble(_):
-            return eq.CPR(af=af.cpr_4thpower_pll(mu=0.01))
+            return eq.CPR(kernel=ak.cpr_4thpower_pll(mu=0.01))
         cpr = make_cpr_ensemble(jnp.arange(2))
     """
 
@@ -1411,7 +1411,7 @@ def cpr_partition_pll(
         AdaptiveFilter with single-dimensional state.
 
     Example:
-        cpr = eq.CPR(af=af.cpr_partition_pll(mu=0.01))
+        cpr = eq.CPR(kernel=ak.cpr_partition_pll(mu=0.01))
     """
     const = jnp.asarray(const)
 

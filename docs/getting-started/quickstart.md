@@ -7,12 +7,12 @@ Commplax modules are [Equinox](https://github.com/patrick-kidger/equinox) PyTree
 ### Create a Module
 
 ```python
-from commplax import equalizer as eq, adaptive_filter as af
+from commplax import equalizer as eq, adaptive_kernel as ak
 
 # Create a 15-tap 2x2 MIMO equalizer with RLS-CMA
 mimo = eq.MIMOCell(
     num_taps=15,
-    af=af.rls_cma(),
+    kernel=ak.rls_cma(),
     dims=2,
 )
 ```
@@ -35,7 +35,7 @@ from jax import numpy as jnp
 # Create 2 independent CPR modules (one per polarization)
 @eqx.filter_vmap
 def make_cpr(_):
-    return eq.CPR(af=af.cpr_partition_pll(mu=0.01))
+    return eq.CPR(kernel=ak.cpr_partition_pll(mu=0.01))
 
 cpr = make_cpr(jnp.arange(2))
 ```

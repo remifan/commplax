@@ -18,7 +18,7 @@
 - `FOE` - Frequency offset estimator
 - `CPR` - Carrier phase recovery
 
-### commplax.adaptive_filter
+### commplax.adaptive_kernel
 
 - `rls_cma()` - RLS-accelerated CMA
 - `lms()` - LMS with optional bias

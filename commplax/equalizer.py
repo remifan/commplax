@@ -18,7 +18,7 @@ import numpy as np
 from jax import lax, numpy as jnp, debug as jdbg
 import equinox as eqx
 from equinox import field
-from commplax import adaptive_filter as _af
+from commplax import adaptive_kernel as _ak
 from commplax.jax_util import default_complexing_dtype, default_floating_dtype, astuple
 from commplax._deprecated.cxopt import make_schedule, Union, Schedule
 from functools import lru_cache
@@ -59,7 +59,7 @@ def rat_poly_h_phases(h_len:int, up:int, flipped:bool=True):
     return ind
 
 
-def af_update_flag(umode, train, i):
+def ak_update_flag(umode, train, i):
     cond0 = umode(i) > 0 # not frozen
     cond1 = train(i) # training
     cond2 = ~train(i) & (umode(i) == 1) # decison
@@ -75,7 +75,7 @@ class MIMOCell(eqx.Module):
     h_phase: Array
     up: int = field(static=True)
     down: int = field(static=True)
-    af: PyTree = field(static=True)
+    kernel: PyTree = field(static=True)
     update_mode: Union[int, Schedule] = field(static=True)
 
     def __init__(
@@ -86,7 +86,7 @@ class MIMOCell(eqx.Module):
         w0=None,
         up: int = 1,
         down: int = 1,
-        af: PyTree = None,
+        kernel: PyTree = None,
         state: Array = None,
         fifo: Array = None,
         inner_i: Array = jnp.array(0),
@@ -98,8 +98,8 @@ class MIMOCell(eqx.Module):
         dtype = default_complexing_dtype() if dtype is None else dtype
         self.up = up
         self.down = down
-        self.af = _af.lms() if af is None else af
-        self.state = self.af.init(w0=w0, taps=num_taps, dims=dims, dtype=dtype, nspike=up) if state is None else state
+        self.kernel = _ak.lms() if kernel is None else kernel
+        self.state = self.kernel.init(w0=w0, taps=num_taps, dims=dims, dtype=dtype, nspike=up) if state is None else state
         self.inner_i = jnp.asarray(inner_i) if inner_i is None else inner_i
         self.outer_i = jnp.asarray(outer_i) if outer_i is None else outer_i
         self.in_phase = jnp.asarray(rat_poly_inp_phases(up, down)) if in_phase is None else in_phase
@@ -117,17 +117,17 @@ class MIMOCell(eqx.Module):
         w_i = self.state[0].at[..., i_w].get(mode='fill', fill_value=0.)
         state_i = (w_i,) + self.state[1:]
 
-        # apply the AF on the input
+        # apply the kernel on the input
         dummy_out = jnp.zeros_like(x)
         output, inner_i = lax.cond(
             valid_input_phase,
-            lambda *_: (self.af.apply(state_i, fifo), self.inner_i+1),
+            lambda *_: (self.kernel.apply(state_i, fifo), self.inner_i+1),
             lambda *_: (dummy_out, self.inner_i),
             )
-        # update the AF states
+        # update the kernel states
         state_i = lax.cond(
-            valid_input_phase & af_update_flag(self.update_mode, self.af.update.train, inner_i),
-            lambda *_: self.af.update(self.inner_i, state_i, (fifo, *args))[0],
+            valid_input_phase & ak_update_flag(self.update_mode, self.kernel.update.train, inner_i),
+            lambda *_: self.kernel.update(self.inner_i, state_i, (fifo, *args))[0],
             lambda *_: state_i,
             )
 
@@ -145,18 +145,18 @@ class FOE(eqx.Module):
     i: Int
     t: Int
     state: PyTree
-    af: PyTree = field(static=True)
+    kernel: PyTree = field(static=True)
     uar: float = field(static=True)
     mode: str = field(static=True)
 
-    def __init__(self, fo=0.0, uar=1.0, af=None, i=0, t=0, mode="feedforward", state=None, af_kwds={}):
+    def __init__(self, fo=0.0, uar=1.0, kernel=None, i=0, t=0, mode="feedforward", state=None, kernel_kwds={}):
         self.i = jnp.asarray(i)
         self.t = jnp.asarray(t)
-        self.af = _af.foe_YanW_ekf(**af_kwds) if af is None else af
+        self.kernel = _ak.foe_YanW_ekf(**kernel_kwds) if kernel is None else kernel
         self.fo = jnp.asarray(fo)
         self.uar = uar * 1.0
         fo4init = fo if mode == "feedforward" else 0.
-        self.state = self.af.init(fo4init) if state is None else state
+        self.state = self.kernel.init(fo4init) if state is None else state
         self.mode = mode
 
     def __call__(self, input):
@@ -169,7 +169,7 @@ class FOE(eqx.Module):
         return foe, output
 
     def update(self, input):
-        state, out = self.af.update(self.i, self.state, input)
+        state, out = self.kernel.update(self.i, self.state, input)
         fo = self.fo + out[0] if self.mode == "feedback" else out[0]
         foe = dc.replace(self, fo=fo, state=state, i=self.i+1)
         return foe, input
@@ -191,7 +191,7 @@ class CPR(eqx.Module):
     Example:
         @eqx.filter_vmap
         def make_cpr_ensemble(_):
-            return CPR(af=af.cpr_4thpower_pll(mu=0.01))
+            return CPR(kernel=ak.cpr_4thpower_pll(mu=0.01))
         cpr = make_cpr_ensemble(jnp.arange(2))
 
         @eqx.filter_vmap
@@ -203,29 +203,29 @@ class CPR(eqx.Module):
     """
     phase: Float
     i: Int
-    af: PyTree = field(static=True)
+    kernel: PyTree = field(static=True)
 
-    def __init__(self, phase=0.0, af=None, i=0):
+    def __init__(self, phase=0.0, kernel=None, i=0):
         self.i = jnp.asarray(i)
         self.phase = jnp.asarray(phase)
-        self.af = _af.cpr_4thpower_pll() if af is None else af
+        self.kernel = _ak.cpr_4thpower_pll() if kernel is None else kernel
 
     def __call__(self, y):
         """Process single symbol: update phase and apply correction."""
-        new_phase, _ = self.af.update(self.i, self.phase, y)
-        y_corrected = self.af.apply(new_phase, y)
+        new_phase, _ = self.kernel.update(self.i, self.phase, y)
+        y_corrected = self.kernel.apply(new_phase, y)
         cpr = dc.replace(self, phase=new_phase, i=self.i + 1)
         return cpr, y_corrected
 
     def update(self, y):
         """Update phase estimate from single symbol."""
-        new_phase, aux = self.af.update(self.i, self.phase, y)
+        new_phase, aux = self.kernel.update(self.i, self.phase, y)
         cpr = dc.replace(self, phase=new_phase, i=self.i + 1)
         return cpr, y
 
     def apply(self, y):
         """Apply current phase correction to single symbol."""
-        y_corrected = self.af.apply(self.phase, y)
+        y_corrected = self.kernel.apply(self.phase, y)
         return self, y_corrected
 
 

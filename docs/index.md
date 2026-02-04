@@ -14,10 +14,10 @@ Since commplax was first released for the paper [gdbp_study](https://github.com/
 Modules are [Equinox](https://github.com/patrick-kidger/equinox) PyTrees — compatible with all JAX transforms.
 
 ```python
-from commplax import equalizer as eq, adaptive_filter as af, module as mod
+from commplax import equalizer as eq, adaptive_kernel as ak, module as mod
 
 # Create module
-mimo = eq.MIMOCell(15, af=af.rls_cma(), dims=2)
+mimo = eq.MIMOCell(15, kernel=ak.rls_cma(), dims=2)
 
 # Run with scan (JIT-compiled)
 mimo, out = mod.scan_with()(mimo, signal)
