@@ -46,6 +46,13 @@ mimo = eq.MIMOCell(15, af=af.rls_cma(), dims=2)
 mimo, out = mod.scan_with()(mimo, signal)
 ```
 
+## Examples
+
+Interactive [marimo](https://marimo.io) notebooks — run locally or in the cloud.
+
+| Example | Description | |
+|---------|-------------|---|
+| [01_basic_mimo.py](examples/01_basic_mimo.py) | Basic MIMO equalization | [![Open in molab](https://img.shields.io/badge/Open%20in-molab-blue)](https://molab.marimo.io/github/remifan/commplax/blob/main/examples/01_basic_mimo.py) |
 
 ## Reference implementations (with sample mode)
 PMD layer:
