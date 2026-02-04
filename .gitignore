@@ -2,6 +2,7 @@
 nb_debug
 local
 data
+notes/
 
 # doc
 docs/_build
