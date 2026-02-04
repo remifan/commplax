@@ -23,80 +23,172 @@ Reference:
 """
 
 import jax.numpy as jnp
-from jax import lax
+from jax import vmap
+from commplax.filter import rcosdesign
+from commplax.signal import fftconvolve
 
 
-def subcarrier_mux(num_subcarriers=2, rolloff=1/16, baud_rate=252.5e9):
-    '''
-    Sub-carrier multiplexer kernel for ZR+.
+def _upsample(x, factor):
+    """Upsample 1D signal by inserting zeros."""
+    n = x.shape[0]
+    y = jnp.zeros(n * factor, dtype=x.dtype)
+    y = y.at[::factor].set(x)
+    return y
 
-    Multiplexes two digital sub-carriers onto dual polarization:
-    - Each sub-carrier is RRC filtered (roll-off = 1/16)
+
+def _upsample_2d(x, factor):
+    """Upsample 2D signal (n_samples, n_pols) along first axis."""
+    return vmap(lambda col: _upsample(col, factor), in_axes=1, out_axes=1)(x)
+
+
+def _apply_filter(x, h):
+    """Apply filter to 1D signal."""
+    return fftconvolve(x, h, mode='same')
+
+
+def _apply_filter_2d(x, h):
+    """Apply filter to 2D signal (n_samples, n_pols) along first axis."""
+    if x.ndim == 1:
+        return _apply_filter(x, h)
+    return vmap(lambda col: _apply_filter(col, h), in_axes=1, out_axes=1)(x)
+
+
+def subcarrier_mux(num_subcarriers=2, rolloff=1/16, sps=2, rrc_span=32):
+    """
+    Sub-carrier multiplexer/demultiplexer kernel for ZR+.
+
+    Multiplexes digital sub-carriers with RRC pulse shaping and frequency offset:
+    - Each sub-carrier is upsampled and RRC filtered (roll-off = 1/16)
     - Sub-carriers are offset from center by ±¼·Fb·(1+α)
-    - X and Y polarizations are merged
+    - Signals are summed to form the combined output
 
     Args:
         num_subcarriers: Number of sub-carriers (default: 2 for ZR+)
-        rolloff: RRC roll-off factor (default: 1/16)
-        baud_rate: Aggregate baud rate in Hz (default: 252.5 GBd)
+        rolloff: RRC roll-off factor α (default: 1/16)
+        sps: Samples per symbol after upsampling (default: 2)
+        rrc_span: RRC filter span in symbols (default: 32)
 
     Returns:
-        mux: Function (subcarrier_signals) -> combined_signal
-        demux: Function (combined_signal) -> subcarrier_signals
+        mux: Function (subcarrier_symbols) -> combined_signal
+        demux: Function (combined_signal) -> subcarrier_symbols
+
+    Example:
+        >>> mux, demux = subcarrier_mux(num_subcarriers=2, sps=2)
+        >>> # TX: multiplex two sub-carriers
+        >>> combined = mux([sc0_symbols, sc1_symbols])
+        >>> # RX: demultiplex back
+        >>> sc0_rx, sc1_rx = demux(combined)
 
     Note:
-        This is a placeholder implementation.
-    '''
-    # Sub-carrier frequency offset: ±¼·Fb·(1+α)
-    freq_offset = baud_rate * (1 + rolloff) / 4
+        Sub-carrier frequency offsets per OIF 1600ZR+ spec (Section 6.8):
+        - SC0: -¼·Fb·(1+α) from center
+        - SC1: +¼·Fb·(1+α) from center
+        where Fb is the aggregate baud rate.
+    """
+    # Design RRC filter for pulse shaping
+    rrc = jnp.array(rcosdesign(rolloff, rrc_span, sps, shape='sqrt'))
 
-    def mux(subcarrier_signals):
-        '''
-        Multiplex sub-carrier signals.
+    # Normalized frequency offset for each sub-carrier
+    # Sub-carriers at ±¼·(1+α) relative to aggregate symbol rate
+    # In normalized frequency (relative to sample rate = sps * baud_per_sc):
+    # offset = ±¼·(1+α) * Fb / Fs = ±¼·(1+α) * Fb / (sps * Fb/2) = ±(1+α)/(2*sps)
+    freq_offset_norm = (1 + rolloff) / (2 * sps)
+
+    def _freq_shift(signal, f_norm):
+        """Apply frequency shift to signal."""
+        n_samples = signal.shape[0]
+        t = jnp.arange(n_samples)
+        shift = jnp.exp(1j * 2 * jnp.pi * f_norm * t)
+        if signal.ndim == 2:
+            shift = shift[:, None]
+        return signal * shift
+
+    def mux(subcarrier_symbols):
+        """
+        Multiplex sub-carrier symbols into combined signal.
 
         Args:
-            subcarrier_signals: Array of shape (num_subcarriers, num_samples, num_pols)
-                                or list of sub-carrier signal arrays
+            subcarrier_symbols: List of symbol arrays, each (n_symbols,) or (n_symbols, n_pols)
+                               or array of shape (num_subcarriers, n_symbols, n_pols)
 
         Returns:
-            combined: Combined signal, shape (num_samples, num_pols)
-        '''
-        # TODO: Implement proper sub-carrier multiplexing:
-        # 1. RRC filter each sub-carrier
-        # 2. Frequency shift by ±freq_offset
-        # 3. Sum the sub-carriers
+            combined: Combined signal, shape (n_symbols * sps, n_pols) or (n_symbols * sps,)
+        """
+        if isinstance(subcarrier_symbols, jnp.ndarray) and subcarrier_symbols.ndim == 3:
+            subcarrier_symbols = [subcarrier_symbols[i] for i in range(num_subcarriers)]
 
-        # Placeholder: simple sum
-        if isinstance(subcarrier_signals, list):
-            subcarrier_signals = jnp.stack(subcarrier_signals, axis=0)
-        combined = jnp.sum(subcarrier_signals, axis=0)
+        combined = None
+        for i, sc_syms in enumerate(subcarrier_symbols):
+            sc_syms = jnp.atleast_1d(sc_syms)
+            is_1d = sc_syms.ndim == 1
+
+            if is_1d:
+                sc_syms = sc_syms[:, None]
+
+            # 1. Upsample (insert zeros)
+            upsampled = _upsample_2d(sc_syms, sps)
+
+            # 2. RRC pulse shaping
+            shaped = _apply_filter_2d(upsampled, rrc)
+
+            # 3. Frequency shift: SC0 -> -offset, SC1 -> +offset
+            f_shift = (2 * i - (num_subcarriers - 1)) / (num_subcarriers - 1) * freq_offset_norm
+            shifted = _freq_shift(shaped, f_shift)
+
+            # 4. Accumulate
+            if combined is None:
+                combined = shifted
+            else:
+                combined = combined + shifted
+
+            if is_1d:
+                combined = combined[:, 0]
+
         return combined
 
     def demux(combined_signal):
-        '''
-        Demultiplex combined signal into sub-carriers.
+        """
+        Demultiplex combined signal into sub-carrier symbols.
 
         Args:
-            combined: Combined signal, shape (num_samples, num_pols)
+            combined_signal: Combined signal, shape (n_samples,) or (n_samples, n_pols)
 
         Returns:
-            subcarrier_signals: Array of shape (num_subcarriers, num_samples, num_pols)
-        '''
-        # TODO: Implement proper sub-carrier demultiplexing:
-        # 1. Frequency shift to baseband for each sub-carrier
-        # 2. Low-pass filter
-        # 3. Matched filter (RRC)
+            subcarrier_symbols: List of symbol arrays
+        """
+        combined = jnp.atleast_1d(combined_signal)
+        is_1d = combined.ndim == 1
 
-        # Placeholder: duplicate signal
-        subcarrier_signals = jnp.stack([combined_signal] * num_subcarriers, axis=0)
-        return subcarrier_signals
+        if is_1d:
+            combined = combined[:, None]
+
+        subcarrier_symbols = []
+        for i in range(num_subcarriers):
+            # 1. Frequency shift to baseband (opposite sign of mux)
+            f_shift = -(2 * i - (num_subcarriers - 1)) / (num_subcarriers - 1) * freq_offset_norm
+            baseband = _freq_shift(combined, f_shift)
+
+            # 2. Matched filter (RRC)
+            filtered = _apply_filter_2d(baseband, rrc)
+
+            # 3. Downsample (at optimal sampling instant)
+            # Adjust for filter group delay
+            delay = len(rrc) // 2
+            symbols = filtered[delay::sps]
+
+            if is_1d:
+                symbols = symbols[:, 0]
+
+            subcarrier_symbols.append(symbols)
+
+        return subcarrier_symbols
 
     return mux, demux
 
 
 def subcarrier_distribute(num_subcarriers=2, interleave_bits=128):
-    '''
-    Distribute OFEC output to sub-carriers.
+    """
+    Distribute OFEC output bits to sub-carriers.
 
     After OFEC interleaving, bits are distributed to sub-carriers in groups
     of 128 bits in round-robin fashion.
@@ -106,37 +198,41 @@ def subcarrier_distribute(num_subcarriers=2, interleave_bits=128):
         interleave_bits: Bits per distribution group (default: 128)
 
     Returns:
-        distribute: Function (bits) -> (sc0_bits, sc1_bits, ...)
-        merge: Function (sc0_bits, sc1_bits, ...) -> bits
+        distribute: Function (bits) -> tuple of bit arrays
+        merge: Function (tuple of bit arrays) -> bits
 
-    Note:
-        This is a placeholder implementation.
-    '''
+    Example:
+        >>> distribute, merge = subcarrier_distribute()
+        >>> sc0_bits, sc1_bits = distribute(ofec_output)
+        >>> recovered = merge((sc0_bits, sc1_bits))
+    """
 
     def distribute(bits):
-        '''
-        Distribute bits to sub-carriers.
+        """
+        Distribute bits to sub-carriers in round-robin groups.
 
         Args:
-            bits: Input bits from OFEC interleaver
+            bits: Input bits from OFEC interleaver, shape (n_bits,)
 
         Returns:
             subcarrier_bits: Tuple of bit arrays, one per sub-carrier
-        '''
-        # Reshape to groups of interleave_bits
-        n_groups = len(bits) // interleave_bits
-        bits_grouped = bits[:n_groups * interleave_bits].reshape(n_groups, interleave_bits)
+        """
+        bits = jnp.atleast_1d(bits)
+        n_groups = bits.shape[0] // (interleave_bits * num_subcarriers)
+        n_total = n_groups * interleave_bits * num_subcarriers
 
-        # Round-robin distribution
-        subcarrier_bits = []
-        for i in range(num_subcarriers):
-            sc_bits = bits_grouped[i::num_subcarriers].reshape(-1)
-            subcarrier_bits.append(sc_bits)
+        # Reshape to (n_groups, num_subcarriers, interleave_bits)
+        bits_grouped = bits[:n_total].reshape(n_groups, num_subcarriers, interleave_bits)
 
-        return tuple(subcarrier_bits)
+        # Extract each sub-carrier's bits
+        subcarrier_bits = tuple(
+            bits_grouped[:, i, :].reshape(-1) for i in range(num_subcarriers)
+        )
+
+        return subcarrier_bits
 
     def merge(subcarrier_bits):
-        '''
+        """
         Merge sub-carrier bits back to single stream.
 
         Args:
@@ -144,17 +240,15 @@ def subcarrier_distribute(num_subcarriers=2, interleave_bits=128):
 
         Returns:
             bits: Merged bit stream
-        '''
-        # Interleave back
-        sc_arrays = [sb.reshape(-1, interleave_bits) for sb in subcarrier_bits]
+        """
+        # Stack and interleave
+        sc_arrays = [jnp.atleast_1d(sb).reshape(-1, interleave_bits) for sb in subcarrier_bits]
         n_groups = sc_arrays[0].shape[0]
 
-        merged_groups = []
-        for i in range(n_groups):
-            for sc in sc_arrays:
-                merged_groups.append(sc[i])
+        # Stack to (n_groups, num_subcarriers, interleave_bits) and flatten
+        stacked = jnp.stack(sc_arrays, axis=1)
+        bits = stacked.reshape(-1)
 
-        bits = jnp.concatenate(merged_groups)
         return bits
 
     return distribute, merge
