@@ -6,31 +6,18 @@ Since commplax was first released for the paper [gdbp_study](https://github.com/
 
 ## Installation
 
-**Requirements:** Python >= 3.11 (3.11 tested)
-
-Editable install is recommended for easier testing and debugging.
+**Requirements:** Python >= 3.11
 
 ```bash
 git clone https://github.com/remifan/commplax.git
 cd commplax
+pip install -e ".[plot]"          # CPU with visualization
+pip install -e ".[plot,cuda12]"   # CUDA 12 with visualization
 ```
 
-**CPU only** (Windows/Linux/Mac):
-```bash
-pip install -e "."
-```
+Optional extras: `plot` (visualization), `cuda12` (GPU), `dev` (testing/linting), `docs` (documentation)
 
-**CUDA 12** (Linux only, Windows not supported; WSL2 may work but untested):
-```bash
-pip install -e ".[cuda12]"
-```
-
-Verify GPU detection:
-```python
-import jax; print(jax.devices())
-```
-
-> **Note:** CUDA 13 with JAX >= 0.7 is untested. See [JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html) for more details.
+> **Note:** See [JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html) for GPU setup details.
 
 ## Highlights
 
