@@ -45,6 +45,7 @@ Interactive [marimo](https://marimo.io) notebooks — see [examples/](examples/)
 - [x] Carrier phase recovery, frequency offset estimation
 - [x] Polyphase resampler, symbol timing recovery
 - [x] Viterbi detector
+- [ ] Sub-carrier mux/demux
 
 **Shaping & Coding:**
 - [x] Distribution matcher (CCDM)
@@ -58,6 +59,7 @@ Interactive [marimo](https://marimo.io) notebooks — see [examples/](examples/)
 **Channel Models:**
 - [x] Fiber propagation (Manakov SSF)
 - [x] Optical modulator, laser source
+- [ ] Other analogs
 
 
 ## Acknowledgement
