@@ -1,4 +1,4 @@
-# Commplax: Optical PHY in JAX
+# Commplax: Functional Optical PHY in JAX
 
 > **Note:** Commplax is under heavy development. APIs may change and things can break.
 

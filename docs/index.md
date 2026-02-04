@@ -1,6 +1,6 @@
 # Commplax
 
-Optical PHY in JAX.
+Functional Optical PHY in JAX.
 
 !!! warning "Under Development"
     Commplax is under heavy development. APIs may change and things can break.
