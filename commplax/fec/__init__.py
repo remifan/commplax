@@ -17,7 +17,19 @@
 This module provides FEC encoder/decoder kernels for coherent optical systems.
 
 Available kernels:
-    - OFEC: Open FEC used in 1600ZR/ZR+ (placeholder)
+    - OFEC: Open FEC encoder/decoder (8 parallel BCH encoders + 4 interleavers)
+    - OFEC_interleaver: Standalone interleaver kernel
+    - BCH256_239: BCH constituent code encoder/decoder
 """
 
-from .ofec import OFEC
+from .ofec import (
+    OFEC,
+    OFEC_interleaver,
+    BCH256_239,
+    BCH_GENERATOR_POLY,
+    BCH_N,
+    BCH_K,
+    OFEC_BLOCK_INPUT_BITS,
+    OFEC_ENCODER_INPUT_BITS,
+    OFEC_ENCODER_OUTPUT_BITS,
+)
