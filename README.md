@@ -37,19 +37,23 @@ mimo, out = mod.scan_with()(mimo, signal)
 
 Interactive [marimo](https://marimo.io) notebooks — see [examples/](examples/) or [documentation](https://remifan.github.io/commplax/examples/).
 
-## Reference implementations (with sample mode)
-PMD layer:
-- [x] M/K-spaced NxN MIMO
-- [x] Adaptive equalizers(CMA/LMS/RLS/Kalman...)
-- [x] Polyphase resampler
-- [x] Detector (e.g., Viterbi)
-- [x] Timing syncrhonizer
-- [x] Distribution matcher (e.g. CCDM)
-- [ ] Probabilistic shaping
-- [ ] Standards-compliant FEC (e.g., CFEC, oFEC)
+## Features
 
-Optical channel:
-- [ ] fiber/WSS/ROSA/TOSA/...
+**RX DSP:**
+- [x] NxN MIMO equalizer (M/K-spaced butterfly)
+- [x] Adaptive filters (CMA, LMS, RLS, Kalman)
+- [x] Carrier phase recovery, frequency offset estimation
+- [x] Polyphase resampler, symbol timing recovery
+- [x] Viterbi detector
+
+**TX DSP:**
+- [x] Distribution matcher (CCDM)
+- [ ] Probabilistic shaping (PCS)
+- [ ] OFEC encoder/decoder
+
+**Channel models:**
+- [x] Fiber propagation (Manakov SSF)
+- [x] Optical modulator, laser source
 
 
 ## Acknowledgement
