@@ -18,8 +18,21 @@ This module provides framing/deframing kernels for 1600ZR/ZR+ systems.
 
 Available kernels:
     - flexo: FlexO/100G ZR frame structure
-    - dsp_frame: DSP sub-frame and super-frame structure
+    - dsp_frame: DSP sub-frame, super-frame, symbol mapping, interleaver merge
 """
 
 from .flexo import FlexO_frame, ZR_instance
-from .dsp_frame import DSP_subframe, DSP_superframe
+from .dsp_frame import (
+    DSP_subframe,
+    DSP_superframe,
+    symbol_mapper_16QAM,
+    interleaver_merge,
+    subcarrier_bit_distribute,
+    # Constants
+    SUBFRAME_SYMBOLS,
+    SUPERFRAME_SUBFRAMES,
+    SUPERFRAME_SYMBOLS,
+    PAYLOAD_SYMBOLS,
+    PILOT_INTERVAL,
+    TS_SYMBOLS,
+)
