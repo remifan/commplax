@@ -37,21 +37,25 @@ mimo, out = mod.scan_with()(mimo, signal)
 
 Interactive [marimo](https://marimo.io) notebooks — see [examples/](examples/) or [documentation](https://remifan.github.io/commplax/examples/).
 
-## Features
+## Checklist
 
-**RX DSP:**
+**Coherent DSP:**
 - [x] NxN MIMO equalizer (M/K-spaced butterfly)
 - [x] Adaptive filters (CMA, LMS, RLS, Kalman)
 - [x] Carrier phase recovery, frequency offset estimation
 - [x] Polyphase resampler, symbol timing recovery
 - [x] Viterbi detector
 
-**TX DSP:**
+**Shaping & Coding:**
 - [x] Distribution matcher (CCDM)
 - [ ] Probabilistic shaping (PCS)
 - [ ] OFEC encoder/decoder
 
-**Channel models:**
+**Framing:**
+- [ ] FlexO / 100G ZR instances
+- [ ] DSP sub-frame / super-frame
+
+**Channel Models:**
 - [x] Fiber propagation (Manakov SSF)
 - [x] Optical modulator, laser source
 
