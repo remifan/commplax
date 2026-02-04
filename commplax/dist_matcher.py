@@ -280,3 +280,98 @@ def CCDM_helper(target_p, n_syms=128, max_no_bits=None, *args, **kwargs):
 
     return freqs, rate, enc, dec
 
+
+# =============================================================================
+# Probabilistic Constellation Shaping (PCS) - Hierarchical LUT Distribution Matcher
+# Reference: OIF 1600ZR+ Implementation Agreement (oif2024.447.06)
+# =============================================================================
+
+def PCS(lut_tables=None):
+    '''
+    Probabilistic Constellation Shaping using hierarchical LUT-based distribution matcher.
+
+    This is used in 1600ZR+ to shape the amplitude distribution for improved SNR efficiency.
+    The shaping separates amplitude bits (shaped via LUTs) from sign bits (uniform).
+
+    Args:
+        lut_tables: Dictionary of LUT tables for the hierarchical tree.
+                    If None, uses default tables for 1600ZR+ (b=114 bits per column).
+
+    Returns:
+        encode: Function (bits) -> (amplitude_syms, sign_bits)
+        decode: Function (amplitude_syms, sign_bits) -> bits
+
+    Reference:
+        [1] OIF Implementation Agreement for 1600ZR+ (oif2024.447.06), Section 6.3
+        [2] "Fixed Hierarchical Tree Probabilistic Constellation Shaping"
+
+    Note:
+        This is a placeholder implementation. Full implementation requires:
+        - 5-layer LUT hierarchy (A→B→C→D→E)
+        - Post-encode 35-bit permutation for OFEC compatibility
+        - Proper bit-to-LUT address mapping
+    '''
+    # TODO: Implement full hierarchical LUT structure per OIF spec
+    # For now, return identity functions as placeholder
+
+    def encode(bits):
+        '''
+        Encode uniform bits to shaped amplitude symbols + sign bits.
+
+        Args:
+            bits: Input bit array
+
+        Returns:
+            amplitude_bits: Shaped amplitude bits (from LUT outputs)
+            sign_bits: Uniform sign bits (passed through)
+        '''
+        # Placeholder: pass through (no shaping)
+        # Real implementation splits bits into LUT inputs and sign bits,
+        # processes through hierarchical LUT tree
+        n = len(bits)
+        n_sign = n // 4  # Approximate: ~1504 sign bits per 3328 input bits
+        sign_bits = bits[:n_sign]
+        amplitude_bits = bits[n_sign:]
+        return amplitude_bits, sign_bits
+
+    def decode(amplitude_bits, sign_bits):
+        '''
+        Decode shaped symbols back to uniform bits.
+
+        Args:
+            amplitude_bits: Shaped amplitude bits
+            sign_bits: Uniform sign bits
+
+        Returns:
+            bits: Recovered uniform bits
+        '''
+        # Placeholder: concatenate (inverse of encode placeholder)
+        bits = jnp.concatenate([sign_bits, amplitude_bits])
+        return bits
+
+    return encode, decode
+
+
+def PCS_helper(mode='1600ZR+'):
+    '''
+    Helper to create PCS encoder/decoder for specific ZR+ modes.
+
+    Args:
+        mode: '1600ZR+' (b=114) or '1200ZR+' (b=62)
+
+    Returns:
+        encode, decode: PCS encoder and decoder functions
+    '''
+    if mode == '1600ZR+':
+        # 1600ZR+: b=114 bits per LUT column
+        # Input: 1,118,208 bits -> Output: 1,193,472 bits
+        pass
+    elif mode == '1200ZR+':
+        # 1200ZR+: b=62 bits per LUT column
+        # Input: 838,656 bits -> Output: similar expansion
+        pass
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Use '1600ZR+' or '1200ZR+'")
+
+    return PCS(lut_tables=None)
+
