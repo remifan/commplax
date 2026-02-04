@@ -14,14 +14,19 @@
 
 """Open FEC (OFEC) encoder/decoder kernels.
 
-OFEC is the forward error correction scheme used in 1600ZR and 1600ZR+.
+OFEC is the forward error correction scheme used in 800ZR, 1600ZR, and 1600ZR+.
 It uses extended BCH(256,239) constituent codes in a staircase structure
 with interleaving for burst error tolerance.
 
+Supported specs:
+    - 800ZR: 84 OFEC coder blocks per frame (1,192,480 info bits)
+    - 1600ZR/1600ZR+: 42 OFEC coder blocks per frame
+
 Reference:
     [1] ITU-T G.709.6 - OFEC specification
-    [2] OIF 1600ZR Implementation Agreement (oif2024.044.08), Section 7
-    [3] OIF 1600ZR+ Implementation Agreement (oif2024.447.06), Section 6.4-6.6
+    [2] OIF-800ZR-01.0, Section 5 (FEC and framing)
+    [3] OIF 1600ZR Implementation Agreement (oif2024.044.08), Section 7
+    [4] OIF 1600ZR+ Implementation Agreement (oif2024.447.06), Section 6.4-6.6
 """
 
 import jax.numpy as jnp
@@ -179,15 +184,25 @@ def BCH256_239():
 # OFEC Codeword Structure
 # =============================================================================
 
-# OFEC parameters
+# OFEC parameters (common)
 OFEC_N = 128  # Columns in codeword matrix
 OFEC_B = 16   # Square block size
 OFEC_G = 2    # Guard blocks (2G = 4 block rows)
 OFEC_NUM_ENCODERS = 8
 OFEC_NUM_INTERLEAVERS = 4
+
+# Per-spec OFEC frame parameters
+# 1600ZR/1600ZR+: 42 coder blocks per frame
+OFEC_CODER_BLOCKS_1600ZR = 42
 OFEC_BLOCK_INPUT_BITS = 28416  # Bits per OFEC coder block input
 OFEC_ENCODER_INPUT_BITS = 3552  # Bits per encoder input (28416 / 8)
 OFEC_ENCODER_OUTPUT_BITS = 4096  # Bits per encoder output
+
+# 800ZR: 84 coder blocks per frame (OIF-800ZR-01.0 Section 5.1)
+# 116 rows × 10,280 bits = 1,192,480 info bits -> 84 OFEC coder blocks
+OFEC_CODER_BLOCKS_800ZR = 84
+OFEC_CODER_BLOCK_BITS_800ZR = 14208  # Bits per coder block (84 × 14208 = 1,193,472)
+OFEC_INFO_BITS_800ZR = 1192480  # 116 rows × 10,280 bits
 
 
 def _distribute_to_encoders(bits: jnp.ndarray, num_encoders: int = 8) -> jnp.ndarray:

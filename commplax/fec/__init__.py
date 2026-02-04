@@ -22,10 +22,12 @@ This module provides FEC encoder/decoder kernels for coherent optical systems.
     - ConvolutionalInterleaver: Depth-16 convolutional interleaver
     - FrameScrambler: Frame-synchronous scrambler
 
-1600ZR+ OFEC (OIF 1600ZR+ IA):
+800ZR/1600ZR+ OFEC (ITU-T G.709.6):
     - OFEC: Open FEC encoder/decoder (8 parallel BCH encoders + 4 interleavers)
     - OFEC_interleaver: Standalone interleaver kernel
     - BCH256_239: BCH constituent code encoder/decoder
+    - 800ZR uses 84 OFEC coder blocks per frame
+    - 1600ZR/1600ZR+ uses 42 OFEC coder blocks per frame
 
 Example:
     # 400ZR inner FEC
@@ -37,12 +39,12 @@ Example:
     codeword = encode(message)  # -> 128 bits
     interleaved = interleave(codewords)
 
-    # 1600ZR+ OFEC
+    # 800ZR/1600ZR+ OFEC
     from commplax.fec import OFEC
     encode, decode = OFEC()
 """
 
-# 1600ZR+ OFEC
+# 800ZR/1600ZR+ OFEC
 from .ofec import (
     OFEC,
     OFEC_interleaver,
@@ -53,6 +55,9 @@ from .ofec import (
     OFEC_BLOCK_INPUT_BITS,
     OFEC_ENCODER_INPUT_BITS,
     OFEC_ENCODER_OUTPUT_BITS,
+    OFEC_CODER_BLOCKS_800ZR,
+    OFEC_CODER_BLOCKS_1600ZR,
+    OFEC_INFO_BITS_800ZR,
 )
 
 # 400ZR C-FEC
