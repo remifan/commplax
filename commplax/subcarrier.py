@@ -24,8 +24,8 @@ Reference:
 
 import jax.numpy as jnp
 from jax import vmap
+from jax.scipy.signal import fftconvolve
 from commplax.filter import rcosdesign
-from commplax.signal import fftconvolve
 
 
 def _upsample(x, factor):
