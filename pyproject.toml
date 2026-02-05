@@ -14,6 +14,7 @@ dependencies = [
     "jax",
     "jaxlib",
     "equinox",
+    "scipy",
 ]
 
 [project.optional-dependencies]
