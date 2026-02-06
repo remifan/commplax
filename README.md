@@ -69,6 +69,10 @@ Interactive [marimo](https://marimo.io) notebooks — see [examples/](examples/)
 - [ ] Other analogs
 
 
+## License
+
+Apache 2.0 with AI Training Restriction — see [LICENSE](LICENSE).
+
 ## Acknowledgement
 - [Google/JAX](https://github.com/google/jax)
 - [patrick-kidger/equinox](https://github.com/patrick-kidger/equinox)
