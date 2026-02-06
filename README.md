@@ -76,6 +76,5 @@ Apache 2.0 with AI Training Restriction — see [LICENSE](LICENSE).
 ## Acknowledgement
 - [Google/JAX](https://github.com/google/jax)
 - [patrick-kidger/equinox](https://github.com/patrick-kidger/equinox)
-- [Alan Pak Tao Lau](https://www.alanptlau.org/)
-- [Chao Lu](http://www.eie.polyu.edu.hk/~enluchao/)
+- [Prof. Alan Pak Tao Lau](https://www.polyu.edu.hk/eee/people/academic-staff-and-teaching-staff/prof-lau-pak-tao-alan/) and [Prof. Chao Lu](https://www.polyu.edu.hk/eee/people/academic-staff-and-teaching-staff/prof-lu-chao/) — sponsors of this project since 2021, supporting its first release
 
