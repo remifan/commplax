@@ -276,3 +276,179 @@ def symbol_timing_sync():
         return state, (y, e, μ)
 
     return SymbolTimingSync(init, apply)
+
+
+def centroid_ted(num_taps):
+    """Create a centroid-based Timing Error Detector (TED).
+
+    Returns a pure function that computes timing error from an equalizer's
+    tap energy centroid. The centroid shifts proportionally to sampling
+    phase error, providing a feedback signal for timing recovery.
+
+    The TED accounts for MIMOCell's reversed tap indexing: physical delay
+    k corresponds to state index (num_taps - 1 - k).
+
+    Args:
+        num_taps: Number of equalizer taps (must match MIMOCell's num_taps)
+
+    Returns:
+        A function (eq: MIMOCell) -> timing_error (scalar float).
+        Positive error means sampling early (centroid > center).
+
+    Example::
+
+        ted = centroid_ted(11)
+        error = ted(mimo_cell)  # scalar timing error
+    """
+    center = (num_taps - 1) / 2.0
+    k = num_taps - 1 - jnp.arange(num_taps)
+
+    def ted(eq):
+        # state[0] shape: (dims, dims, num_taps) for up=1,
+        # or (dims, dims, num_taps, up) for up>1.
+        # Sum energy over all axes except the tap axis (always second-to-last
+        # for up>1, or last for up=1). Use dynamic approach: sum all axes
+        # except the last, which is always the tap dimension after h_phase
+        # reindexing in MIMOCell. For up=1 the shape is (dims, dims, num_taps).
+        taps = eq.state[0]
+        tap_energy = jnp.sum(jnp.abs(taps) ** 2, axis=tuple(range(taps.ndim - 1)))
+        centroid = jnp.sum(k * tap_energy) / (jnp.sum(tap_energy) + 1e-10)
+        return centroid - center
+
+    return ted
+
+
+class TimingLoop(eqx.Module):
+    """Closed-loop timing recovery using resampler + MIMO equalizer feedback.
+
+    Composes a VarRateResampler with a MIMOCell equalizer in a feedback loop.
+    The equalizer's tap centroid (via a pluggable TED) drives a PI loop
+    filter that adjusts the resampler's sampling phase.
+
+    Architecture::
+
+        N sps --> Resampler(eps) --> 1 sps --> MIMOCell --> output
+                       ^                          |
+                       +--- kp*e + integrator ---+
+
+    The resampler ratio should be set to ``1 / sps`` so that N sps input is
+    decimated to 1 sps before the equalizer.  The loop operates
+    sample-by-sample: each input sample produces either a valid 1 sps output
+    (after resampling + equalization) or NaN (when the resampler skips).
+    Feedback uses the *previous* timing error since the resampler must run
+    before the equalizer.
+
+    The loop filter is PI (proportional-integral):
+    ``eps = -(kp * timing_error + integrator)``, where the integrator
+    accumulates ``ki * timing_error`` on each valid output.  With the
+    default ``ki=0`` the loop is P-only, which suffices when the nominal
+    resampler ratio exactly matches the true sps.  Set ``ki`` to a small
+    positive value (e.g. 1e-5) to track residual rate mismatch.
+
+    Args:
+        resampler: VarRateResampler with ratio = 1/sps (e.g. 0.5 for 2 sps,
+            0.8 for 1.25 sps). The resampler operates on scalar samples;
+            for multi-dimensional inputs (dims > 1), resample each dimension
+            independently before feeding into this loop.
+        equalizer: MIMOCell configured for 1/1 operation (up=1, down=1)
+        kp: Proportional loop gain. Default 0.5.
+        ki: Integral loop gain. Default 0 (P-only). Use a very small value
+            (e.g. 1e-5) when the nominal ratio has residual rate error.
+        ted: Timing error detector function (eq -> error). Default centroid_ted.
+        timing_error: Initial timing error state. Default 0.
+        integrator: Initial integrator state. Default 0.
+
+    Returns:
+        When called with a single input sample:
+        (updated_loop, (y, timing_error, valid)) where:
+        - y: equalized symbol output, shape (dims,) (NaN if resampler skipped)
+        - timing_error: current timing error from TED
+        - valid: boolean, True if output is valid
+
+    Example::
+
+        from commplax.resampler import VarRateResampler
+        from commplax.equalizer import MIMOCell
+        from commplax import adaptive_kernel as ak, module as mod
+
+        # 2 sps input
+        loop = TimingLoop(
+            resampler=VarRateResampler(ratio=0.5),
+            equalizer=MIMOCell(11, dims=1, up=1, down=1,
+                               kernel=ak.rls_cma(const=const), update_mode=1),
+            kp=0.5,
+        )
+        loop_final, (y, te, valid) = mod.scan_with()(loop, signal_2sps)
+        y_valid = y[valid]
+
+        # 1.25 sps with integral term for rate tracking
+        loop = TimingLoop(
+            resampler=VarRateResampler(ratio=0.8),
+            equalizer=MIMOCell(11, dims=1, up=1, down=1,
+                               kernel=ak.rls_cma(const=const), update_mode=1),
+            kp=0.5,
+            ki=1e-5,
+        )
+    """
+    resampler: eqx.Module
+    equalizer: eqx.Module
+    timing_error: Array
+    integrator: Array
+    kp: float = field(static=True)
+    ki: float = field(static=True)
+    ted: Callable = field(static=True)
+
+    def __init__(self, resampler, equalizer, kp=0.5, ki=0.0, ted=None,
+                 timing_error=None, integrator=None):
+        self.resampler = resampler
+        self.equalizer = equalizer
+        self.kp = kp
+        self.ki = ki
+        self.ted = centroid_ted(equalizer.state[0].shape[2]) if ted is None else ted
+        self.timing_error = jnp.array(0.0) if timing_error is None else jnp.asarray(timing_error)
+        self.integrator = jnp.array(0.0) if integrator is None else jnp.asarray(integrator)
+
+    def __call__(self, x):
+        """Process one input sample through the timing loop.
+
+        Args:
+            x: Single complex input sample (at N sps)
+
+        Returns:
+            Tuple of (updated_loop, (y, timing_error, valid)):
+            - y: Equalized output, shape (dims,) (NaN if resampler skipped)
+            - timing_error: TED output after equalization
+            - valid: True if a symbol was produced
+        """
+        dims = self.equalizer.fifo.shape[1]
+
+        # 1. PI loop filter: eps from previous timing error + integrator
+        #    positive error -> sampling early -> negative eps -> delay output
+        eps = -(self.kp * self.timing_error + self.integrator)
+
+        # 2. Resample with phase adjustment
+        rsplr = dc.replace(self.resampler, acc_phase=eps)
+        rsplr_new, y_arr = rsplr(x)
+        y_1sps = y_arr[0]
+        valid = ~jnp.isnan(y_1sps)
+
+        # 3. Conditionally run equalizer + TED (skip on NaN to protect state)
+        def _update(eq, te):
+            eq_new, y_eq = eq((jnp.atleast_1d(y_1sps), jnp.zeros(dims)))
+            te_new = self.ted(eq_new)
+            return eq_new, y_eq, te_new
+
+        def _hold(eq, te):
+            return eq, jnp.full(dims, jnp.nan + 0j, dtype=eq.fifo.dtype), te
+
+        eq_new, y_eq, te_new = lax.cond(valid, _update, _hold, self.equalizer, self.timing_error)
+
+        # 4. Update integrator (only on valid outputs)
+        integrator_new = jnp.where(valid,
+                                   self.integrator + self.ki * te_new,
+                                   self.integrator)
+
+        # 5. Return updated loop and outputs
+        loop = dc.replace(self, resampler=rsplr_new, equalizer=eq_new,
+                          timing_error=te_new, integrator=integrator_new)
+        return loop, (y_eq, te_new, valid)
